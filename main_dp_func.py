@@ -64,6 +64,7 @@ def federated_learning_pairing(num_clients):
             idx_j = output.index(pairs[i][1])
             output[idx_i], output[idx_j] = output[idx_j], output[idx_i]
     
+    output = range(num_clients)
     return output # returen a vector [leader1, follower1, leader2, follower2, ...]
 
 

@@ -137,8 +137,10 @@ def main():
         global_state_dict = global_model.state_dict()
         c_r_keys = [k for k in global_state_dict.keys() if "weight" in k or "bias" in k]
         c_r_mapping = {k: i for i, k in enumerate(c_r_keys)}
-
-        client_pairing = federated_learning_pairing(n_clients)
+        if method in ["CorBinFL", "AugCorBinFL", "CorBinFLDropout"]:
+            client_pairing = federated_learning_pairing(n_clients)
+        else:
+            client_pairing = [i for i in range(n_clients)]
         client_assignment_r = client_assignment(n_clients, method, gamma=Gamma, dropout=dropout, device=device)
 
         if "CorQuant" in method:
