@@ -86,5 +86,12 @@ To implement the Augmented CorBin-FL, the parameter gamma needs to be set, for i
 python main.py --method AugCorBinFL --epsilon 10 --gamma 0.2
 
 To implement on MNIST dataset  
+<<<<<<< HEAD
 
 python main.py --method CorBinFL --dataset MNIST --epsilon 10 --lambda_param 0.5
+=======
+python main.py --method CorBinFL --dataset MNIST --epsilon 10 --lambda_param 0.5
+
+To implement dropout  
+python main.py --method LDPFL --epsilon 5 --dropout 0.1 --lambda_param 0.4
+>>>>>>> 803a3e8 (CorBin-FL and AugCorBin-FL)

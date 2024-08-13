@@ -4,7 +4,7 @@ import torchvision
 from torch.utils.data import DataLoader, random_split, Dataset
 from torchvision import transforms
 import os
-from typing import Dict, List
+from typing import List
 import random
 import numpy as np
 from torch import optim
@@ -15,7 +15,7 @@ import math
 from scipy import optimize
 
 # device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
-def train_on_client(client_model, dataloader, epochs=1, lr=0.01, weight_decay=0.001, device='cuda:2'):
+def train_on_client(client_model, dataloader, epochs=1, lr=0.01, weight_decay=0.001, device='cpu'):
     
     optimizer = optim.Adam(client_model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
@@ -31,27 +31,20 @@ def train_on_client(client_model, dataloader, epochs=1, lr=0.01, weight_decay=0.
 
     return client_model
 
-def compute_center_and_range(model, device):
+def compute_center_and_range(model, device='cpu'):
     C, R = [], []
     for param in model.parameters():
-        param_data = param.data.cpu().numpy()
-        # center = np.mean(param_data)
-        range_ = 0.5 * np.ptp(param_data)
-        center = (np.max(param_data)+np.min(param_data))/2
+        param_data = param.data
+        range_ = 0.5 * (torch.max(param_data) - torch.min(param_data))
+        center = (torch.max(param_data)+torch.min(param_data))/2
         C.append(center)
         R.append(range_)
-
     R = torch.tensor(R, dtype=torch.float32).to(device)
     C = torch.tensor(C, dtype=torch.float32).to(device)
+
     return C, R
 
-def probability_list(px, NumRand, device="cuda:2"):
-    ProbList = [0] * (2 ** NumRand)
-    ProbList[0] = (1 - px) ** NumRand
-    for i in range(1, 2 ** NumRand):
-        NumOnes = bin(i).count('1')
-        ProbList[i] = ProbList[i - 1] + px ** NumOnes * (1 - px) ** (NumRand - NumOnes)
-    return ProbList
+
 
 def find_index_batch(NumRand, P_batch):
     """
@@ -75,11 +68,11 @@ def find_index_batch(NumRand, P_batch):
 
     return indices.to(P_batch.device)
 
-def comm_rand(NumRand, NumParam, device='cuda:2'):
+def comm_rand(NumRand, NumParam, device='cpu'):
     return torch.randint(0, 2 ** NumRand, (NumParam,), device=device)
 
 
-def perturb_weight(W,  alpha, c, r, CR=None, NumRand=None, UP=None, LDPFL=True, device='cuda:2'):
+def perturb_weight(W,  alpha, c, r, CR=None, NumRand=None, UP=None, LDPFL=True, device='cpu'):
 
     W = W.to(device)
     shape = W.shape

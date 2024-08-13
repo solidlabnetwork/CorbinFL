@@ -4,7 +4,6 @@ import torch.nn as nn
 import numpy as np
 import random
 import GPUtil
-device = torch.device('cuda:2' if torch.cuda.is_available() else 'cpu')
 
 def setup_device(device_type: str):
     if device_type == "GPU":
@@ -31,7 +30,7 @@ def select_free_gpu(max_memory_usage=0.5):
     device = torch.device(f"cuda:{selected_gpu}" if torch.cuda.is_available() else "cpu")
     return device
 
-def validate(model, val_loader, criterion, device='cuda:2'):
+def validate(model, val_loader, criterion, device='cpu'):
     model.eval()
     val_loss = 0.0
     correct = 0
