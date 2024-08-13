@@ -79,12 +79,12 @@ Checkpoints will be saved in the `checkpoint` directory, allowing for resumption
 
 
 ## Example Usage
-To implement dropout in CorBin-FL, set the parameter dropout>0 for instance
+To implement dropout in CorBin-FL, set the parameter dropout>0 for instance  
 python main.py --method CorBinFL --epsilon 10 --dropout 0.3 
 
-To implement the Augmented CorBin-FL, the parameter gamma needs to be set, for instance
+To implement the Augmented CorBin-FL, the parameter gamma needs to be set, for instance  
 python main.py --method AugCorBinFL --epsilon 10 --gamma 0.2
 
-To implement on MNIST dataset
+To implement on MNIST dataset  
 
 python main.py --method CorBinFL --dataset MNIST --epsilon 10 --lambda_param 0.5
