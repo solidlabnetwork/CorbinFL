@@ -1,0 +1,347 @@
+# main_dp_func.py
+import torch
+import torchvision
+from torch.utils.data import DataLoader, random_split, Dataset
+from torchvision import transforms
+import os
+from typing import Dict, List
+import random
+import numpy as np
+from torch import optim
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import math
+from scipy import optimize
+
+# device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+def train_on_client(client_model, dataloader, epochs=1, lr=0.01, weight_decay=0.001, device='cuda:2'):
+    
+    optimizer = optim.Adam(client_model.parameters(), lr=lr, weight_decay=weight_decay)
+    criterion = nn.CrossEntropyLoss()
+    client_model.train()
+    for _ in range(epochs):
+        for images, labels in dataloader:
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = client_model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+    return client_model
+
+def compute_center_and_range(model, device):
+    C, R = [], []
+    for param in model.parameters():
+        param_data = param.data.cpu().numpy()
+        # center = np.mean(param_data)
+        range_ = 0.5 * np.ptp(param_data)
+        center = (np.max(param_data)+np.min(param_data))/2
+        C.append(center)
+        R.append(range_)
+
+    R = torch.tensor(R, dtype=torch.float32).to(device)
+    C = torch.tensor(C, dtype=torch.float32).to(device)
+    return C, R
+
+def probability_list(px, NumRand, device="cuda:2"):
+    ProbList = [0] * (2 ** NumRand)
+    ProbList[0] = (1 - px) ** NumRand
+    for i in range(1, 2 ** NumRand):
+        NumOnes = bin(i).count('1')
+        ProbList[i] = ProbList[i - 1] + px ** NumOnes * (1 - px) ** (NumRand - NumOnes)
+    return ProbList
+
+def find_index_batch(NumRand, P_batch):
+    """
+    Find indices for a batch of probabilities in a list with 2^d elements from 0 to 1.
+    
+    Parameters:
+    P_batch (torch.Tensor): Batch of probabilities
+    d (int): Determines the number of elements in ProbList (2^d)
+    
+    Returns:
+    torch.Tensor: Indices for each probability in the batch
+    """
+    # Calculate 2^d
+    two_pow_d = 2 ** NumRand
+    
+    # Multiply P_batch by 2^d and floor it to get the indices
+    indices = torch.floor(P_batch * two_pow_d).long()
+    
+    # Clamp the indices to be within [0, 2^d - 1]
+    indices = torch.clamp(indices, 0, two_pow_d - 1)
+
+    return indices.to(P_batch.device)
+
+def comm_rand(NumRand, NumParam, device='cuda:2'):
+    return torch.randint(0, 2 ** NumRand, (NumParam,), device=device)
+
+
+def perturb_weight(W,  alpha, c, r, CR=None, NumRand=None, UP=None, LDPFL=True, device='cuda:2'):
+
+    W = W.to(device)
+    shape = W.shape
+    W= W.view(-1)
+
+    # Calculate ProbMarginal
+    ProbMarginal = 0.5 + (torch.clamp(W, c - r, c + r) - c) / (2 * alpha * r)
+
+    if LDPFL:
+        # Create U tensor for LDPFL case
+        U = torch.where(torch.rand_like(W) < ProbMarginal, 1.0, -1.0)
+    else:
+        CR = CR.to(device)
+        # Calculate P based on UP
+        P = ProbMarginal if UP == 1 else 1 - ProbMarginal
+
+        idx = find_index_batch(NumRand, P)
+        IntCR = CR.long()
+         # Create initial U tensor
+        U = torch.full_like(W, UP, dtype=torch.float32)
+        U = torch.where(IntCR >= idx + 1, -UP, U)
+
+
+        middle_case = (IntCR >= idx) & (IntCR < idx + 1)
+
+        # Handle edge cases
+        idx = torch.where(idx + 1 >= 2**NumRand, 2**NumRand - 2, idx)
+
+        if middle_case.any():
+            # Calculate probabilities for idx and idx+1
+            prob_idx = idx.float() / 2**NumRand
+            prob_idx_next = (idx.float() + 1) / 2**NumRand
+
+            # Calculate ProbGrid for middle case
+            ProbGrid = torch.zeros_like(W)
+            ProbGrid[middle_case] = (P[middle_case] - prob_idx[middle_case]) / (prob_idx_next[middle_case] - prob_idx[middle_case])
+
+            # Generate random values and apply to middle case
+            random_values = torch.rand_like(W)
+            UP_tensor = torch.tensor(UP, dtype=torch.float32, device=device)
+            U[middle_case] = torch.where(random_values[middle_case] < ProbGrid[middle_case],
+                                         UP_tensor,
+                                         -UP_tensor)
+
+    # Update W for all elements at once
+    W = c + U * alpha * r
+
+    return W.view(shape)
+
+
+
+def one_dim_one_bit_cq(W, pi, c, r, n_clients, device='cpu'):
+    """
+    Implement the quantization process for a tensor as per the OneDimOneBitCQ algorithm.
+    
+    Parameters:
+    W (torch.Tensor): The input tensor to be quantized (weights)
+    pi (torch.Tensor): The permutation tensor for the current client, same shape as W
+    c (float): Center of the range
+    r (float): Half-width of the range
+    n_clients (int): Number of clients
+    device (torch.device): The device to perform computations on
+    
+    Returns:
+    torch.Tensor: The quantized tensor Q(W) with the same shape as W
+    """
+    # Move input to the specified device
+    W = W.to(device)
+    pi = pi.to(device)
+    
+    # Calculate range bounds
+    l = c - r
+    u = c + r
+    
+    # Clamp W in range [c-r, c+r]
+    W = torch.clamp(W, min=l, max=u)
+    
+    # Step 1: Calculate y
+    y = (W - l) / (2 * r)
+    
+    # Step 2: Calculate U
+    gamma = torch.rand_like(W, device=device) / n_clients
+    U = (pi.float() / n_clients) + gamma
+    
+    # Step 3: Determine Q(W)
+    Q = 2 * r * (U < y).float() + l
+    
+    return Q
+
+
+
+def client_assignment(num_clients, method, gamma=0, dropout=0, device='cpu'):
+    if method == 'CorBinFL':
+        return torch.tensor([1 if i % 2 == 0 else 0 for i in range(num_clients)], device=device)
+    
+    elif method == 'AugCorBinFL':
+
+        assignments = torch.full((num_clients,), -1, dtype=torch.long, device=device)     
+        # Calculate number of clients that will do LDPFL
+        LDPFL_clients = int(num_clients * gamma)
+        # Assign 2 to Randomly selected LDPFL clients (2)
+        LDPFL_indices = torch.randperm(num_clients, device=device)[:LDPFL_clients]
+        assignments[LDPFL_indices] = 2
+        # Assign leaders (1) and followers (0) to remaining positions
+        empty_positions = torch.nonzero(assignments == -1).squeeze()
+        for i in range(0, len(empty_positions), 2):
+            if i < len(empty_positions):
+                assignments[empty_positions[i]] = 1  # Leader
+            if i + 1 < len(empty_positions):
+                assignments[empty_positions[i + 1]] = 0  # Follower       
+        # If there's an odd number of empty positions, make the last one a leader
+        if len(empty_positions) % 2 != 0:
+            assignments[empty_positions[-1]] = 1
+        
+        return assignments
+    elif 'Dropout' in method:
+        assignments = torch.full((num_clients,), -1, dtype=torch.long, device=device) 
+        # Use biased coin flip to determine non-contributing clients (2)
+        coin_flips = torch.bernoulli(torch.full((num_clients,), dropout, device=device))
+        assignments[coin_flips == 1] = 2
+        
+        # Find empty positions
+        empty_positions = torch.nonzero(assignments == -1).squeeze()
+        
+        # Assign leaders (1) and followers (0) to remaining positions
+        for i in range(0, len(empty_positions), 2):
+            if i < len(empty_positions):
+                assignments[empty_positions[i]] = 1  # Leader
+            if i + 1 < len(empty_positions):
+                assignments[empty_positions[i + 1]] = 0  # Follower
+        
+        # If there's an odd number of empty positions, make the last one a leader
+        if len(empty_positions) % 2 != 0:
+            assignments[empty_positions[-1]] = 1
+        
+        return assignments
+    else:
+        return torch.zeros(num_clients, device=device)
+    
+
+def compute_sigma_agm(epsilon, delta, sensitivity):
+    def phi(t):
+        return 0.5 * (1.0 + math.erf(t / math.sqrt(2.0)))
+
+    def B_plus(v):
+        return phi(math.sqrt(epsilon * v)) - math.exp(epsilon) * phi(-math.sqrt(epsilon * (v + 2)))
+
+    def B_minus(u):
+        return phi(-math.sqrt(epsilon * u)) - math.exp(epsilon) * phi(-math.sqrt(epsilon * (u + 2)))
+
+    delta_0 = phi(0) - math.exp(epsilon) * phi(-math.sqrt(2 * epsilon))
+
+    if delta >= delta_0:
+        v_star = optimize.brentq(lambda v: B_plus(v) - delta, 0, 100)
+        alpha = math.sqrt(1 + v_star / 2) - math.sqrt(v_star / 2)
+    else:
+        u_star = optimize.brentq(lambda u: B_minus(u) - delta, 0, 100)
+        alpha = math.sqrt(1 + u_star / 2) + math.sqrt(u_star / 2)
+
+    return alpha * sensitivity / math.sqrt(2 * epsilon)
+
+
+def load_data(dataset_name: str, data_dir: str, n_clients: int):
+    if dataset_name.lower() == 'cifar10':
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+        ])
+        train_dataset = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=transform)
+        test_dataset = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=True, transform=transform)
+        input_channels = 3
+    elif dataset_name.lower() == 'mnist':
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ])
+        train_dataset = torchvision.datasets.MNIST(root=data_dir, train=True, download=True, transform=transform)
+        test_dataset = torchvision.datasets.MNIST(root=data_dir, train=False, download=True, transform=transform)
+        input_channels = 1
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
+
+    # Splitting the training dataset for training and validation
+    train_size = int(0.8 * len(train_dataset))
+    val_size = len(train_dataset) - train_size
+    train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
+
+    # IID distribution among clients
+    dict_users = distribute_data_iid(train_dataset, n_clients)
+    
+    client_dataloaders = [
+        DataLoader(DatasetSubset(train_dataset, dict_users[i]), batch_size=64, shuffle=True)
+        for i in range(n_clients)
+    ]
+    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+    test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+    
+    return client_dataloaders, val_loader, test_dataloader, input_channels
+
+def distribute_data_iid(dataset, num_users):
+    num_items = int(len(dataset) / num_users)
+    all_idxs = np.arange(len(dataset))
+    np.random.shuffle(all_idxs)
+    dict_users = {i: set(all_idxs[i * num_items:(i + 1) * num_items]) for i in range(num_users)}
+    return dict_users
+
+class DatasetSubset(Dataset):
+    def __init__(self, dataset, indices):
+        self.dataset = dataset
+        self.indices = list(indices)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        data_idx = self.indices[idx]
+        return self.dataset[data_idx]
+
+def load_checkpoint(checkpoint_path: str, global_model: nn.Module):
+    if os.path.exists(checkpoint_path):
+        print("Loading the checkpoint from", checkpoint_path)
+        checkpoint = torch.load(checkpoint_path)
+        global_model.load_state_dict(checkpoint['model_state_dict'])
+        start_round = checkpoint['round']
+        accuracy_list = checkpoint['accuracy_list']
+        train_accuracy_list = checkpoint['train_accuracy_list']
+        results = checkpoint['results']
+        counter = checkpoint['counter']
+        best_accuracy = checkpoint['best_val_accuracy']
+        
+        # Restore the saved states if they exist
+        for state_name in ['torch_rng_state', 'cuda_rng_state', 'numpy_rng_state', 'python_rng_state']:
+            if state_name in checkpoint:
+                if state_name == 'torch_rng_state':
+                    torch.set_rng_state(checkpoint[state_name])
+                elif state_name == 'cuda_rng_state':
+                    torch.cuda.set_rng_state_all(checkpoint[state_name])
+                elif state_name == 'numpy_rng_state':
+                    np.random.set_state(checkpoint[state_name])
+                elif state_name == 'python_rng_state':
+                    random.setstate(checkpoint[state_name])
+            else:
+                print(f"No {state_name} found in the checkpoint.")
+        
+        return start_round, accuracy_list, train_accuracy_list, results, counter, best_accuracy
+    
+    return 0, [], [], [], 0, 0.0
+
+def save_checkpoint(checkpoint_path: str, round: int, global_model: nn.Module, 
+                    accuracy_list: List[float], train_accuracy_list: List[float], 
+                    results: List[List[float]], counter: int, best_accuracy: float):
+    torch.save({
+        'round': round + 1,
+        'model_state_dict': global_model.state_dict(),
+        'accuracy_list': accuracy_list,
+        'train_accuracy_list': train_accuracy_list,
+        'results': results,
+        'counter': counter,
+        'best_val_accuracy': best_accuracy,
+        'torch_rng_state': torch.get_rng_state(),
+        'cuda_rng_state': torch.cuda.get_rng_state_all(),
+        'numpy_rng_state': np.random.get_state(),
+        'python_rng_state': random.getstate()
+    }, checkpoint_path)
+
