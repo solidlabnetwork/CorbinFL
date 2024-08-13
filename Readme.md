@@ -16,7 +16,6 @@ This project implements CorBin-FL and Augmented CorBin-FL methods and compare th
 - Supports MNIST and CIFAR10 datasets
 - Implements ResNet18 and CNN architectures
 
-
 ## Requirements
 
 - Python 3.7+
@@ -77,18 +76,25 @@ Results will be saved in the `result` directory as Excel files, containing accur
 
 Checkpoints will be saved in the `checkpoint` directory, allowing for resumption of training from the last saved state.
 
-
 ## Example Usage
-To implement dropout in CorBin-FL, set the parameter dropout>0 for instance  
+
+To implement dropout in CorBin-FL, set the parameter dropout>0 for instance:
+```
 python main.py --method CorBinFL --epsilon 10 --dropout 0.3 
+```
 
-To implement the Augmented CorBin-FL, the parameter gamma needs to be set, for instance  
+To implement the Augmented CorBin-FL, the parameter gamma needs to be set, for instance:
+```
 python main.py --method AugCorBinFL --epsilon 10 --gamma 0.2
+```
 
-To implement on MNIST dataset  
-
+To implement on MNIST dataset:
+```
 python main.py --method CorBinFL --dataset MNIST --epsilon 10 --lambda_param 0.5
 python main.py --method CorBinFL --dataset MNIST --epsilon 10 --lambda_param 0.5
+```
 
-To implement dropout  
+To implement dropout:
+```
 python main.py --method LDPFL --epsilon 5 --dropout 0.1 --lambda_param 0.4
+```
