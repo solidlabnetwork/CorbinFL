@@ -108,7 +108,7 @@ def perturb_weight(W,  alpha, c, r, CR=None, NumRand=None, UP=None, LDPFL=True, 
 
             # Calculate ProbGrid for middle case
             ProbGrid = torch.zeros_like(W)
-            ProbGrid[middle_case] = (P[middle_case] - prob_idx[middle_case]) / (prob_idx_next[middle_case] - prob_idx[middle_case])
+            ProbGrid[middle_case] = (P[middle_case] - prob_idx[middle_case]) * 2**NumRand
 
             # Generate random values and apply to middle case
             random_values = torch.rand_like(W)
