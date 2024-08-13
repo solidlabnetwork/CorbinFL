@@ -12,6 +12,7 @@ from main_dp_func import (
     comm_rand,
     one_dim_one_bit_cq,
     compute_center_and_range,
+    federated_learning_pairing,
     train_on_client,
     client_assignment,
     compute_sigma_agm,
@@ -129,6 +130,7 @@ def main():
  
     for round in range(start_round, num_rounds):
         round_start_time = time.time()
+
         
         # Compute center and range for each layer
         C, R = compute_center_and_range(global_model, device)
@@ -136,6 +138,7 @@ def main():
         c_r_keys = [k for k in global_state_dict.keys() if "weight" in k or "bias" in k]
         c_r_mapping = {k: i for i, k in enumerate(c_r_keys)}
 
+        client_pairing = federated_learning_pairing(n_clients)
         client_assignment_r = client_assignment(n_clients, method, gamma=Gamma, dropout=dropout, device=device)
 
         if "CorQuant" in method:
@@ -147,9 +150,10 @@ def main():
         # Local training
         local_models = []
         for i in range(n_clients):
+            
             client_model = ResNet18().to(device) if args.dataset == "CIFAR10" else CNNMNIST().to(device)
             client_model.load_state_dict(global_state_dict)
-            client_model = train_on_client(client_model, client_dataloaders[i], epochs=n_local_epochs, lr=learning_rate, weight_decay=weight_decay, device=device)
+            client_model = train_on_client(client_model, client_dataloaders[client_pairing[i]], epochs=n_local_epochs, lr=learning_rate, weight_decay=weight_decay, device=device)
             client_state_dict = client_model.state_dict()
 
             if method in ["CorBinFL", "AugCorBinFL"]:

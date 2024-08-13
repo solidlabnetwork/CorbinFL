@@ -44,6 +44,27 @@ def compute_center_and_range(model, device='cpu'):
 
     return C, R
 
+def federated_learning_pairing(num_clients):
+
+    clients = list(range(num_clients))
+    random.shuffle(clients)    
+    num_pairs = num_clients // 2
+    # Create pairs, leaving out the last client if odd
+    pairs = [(clients[i], clients[i+1]) for i in range(0, num_pairs * 2, 2)]
+    
+    output = clients.copy()
+    
+    # For each pair, find the leader and bring the leader to position before the follower
+    for i in range(len(pairs)):
+        Y_i = np.random.binomial(1, 0.5)
+        Y_j = np.random.binomial(1, 0.5)
+        
+        if Y_i != Y_j: # if Y_i = Y_j then the leader is already in the correct position
+            idx_i = output.index(pairs[i][0])
+            idx_j = output.index(pairs[i][1])
+            output[idx_i], output[idx_j] = output[idx_j], output[idx_i]
+    
+    return output # returen a vector [leader1, follower1, leader2, follower2, ...]
 
 
 def find_index_batch(NumRand, P_batch):
