@@ -124,9 +124,8 @@ def perturb_weight(W,  alpha, c, r, CR=None, NumRand=None, UP=None, LDPFL=True, 
         idx = torch.where(idx + 1 >= 2**NumRand, 2**NumRand - 2, idx)
 
         if middle_case.any():
-            # Calculate probabilities for idx and idx+1
+            # Calculate probabilities for idx 
             prob_idx = idx.float() / 2**NumRand
-            prob_idx_next = (idx.float() + 1) / 2**NumRand
 
             # Calculate ProbGrid for middle case
             ProbGrid = torch.zeros_like(W)
@@ -236,6 +235,24 @@ def client_assignment(num_clients, method, gamma=0, dropout=0, device='cpu'):
     
 
 def compute_sigma_agm(epsilon, delta, sensitivity):
+    """
+    Compute the optimal sigma for the Gaussian mechanism using the Analytical Gaussian Mechanism (AGM).
+
+    Balle B, Wang YX. 
+    Improving the gaussian mechanism for differential privacy: Analytical calibration and optimal denoising. 
+    In International Conference on Machine Learning 2018 Jul 3 (pp. 394-403). PMLR.
+
+    Inputs:
+    - epsilon (float): The epsilon parameter for differential privacy.
+    - delta (float): The delta parameter for differential privacy.
+    - sensitivity (float): The sensitivity of the query.
+
+    Output:
+    - sigma (float): The optimal standard deviation for the Gaussian mechanism.
+
+    The function computes the tightest possible sigma for the Gaussian mechanism
+    that satisfies (epsilon, delta)-differential privacy for a given query sensitivity.
+    """
     def phi(t):
         return 0.5 * (1.0 + math.erf(t / math.sqrt(2.0)))
 
