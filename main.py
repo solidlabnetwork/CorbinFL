@@ -87,6 +87,7 @@ def main():
     print('Method:', method)
 
     # Load data
+    print(args.dataset)
     data_dir = f'./data/{args.dataset}'
     os.makedirs(data_dir, exist_ok=True)
     client_dataloaders, val_loader, test_dataloader, _ = load_data(args.dataset, data_dir, n_clients)
@@ -99,21 +100,21 @@ def main():
     # Setup checkpoint
         # Generate the Name for checkpoint and results
     if method == "CorBinFL":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_epc{num_rounds}'   
+        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_num_clients_{n_clients}_epc{num_rounds}'   
     elif method == "AugCorBinFL":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_Gamma_{args.gamma}_epc{num_rounds}'
+        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_Gamma_{args.gamma}_num_clients_{n_clients}_epc{num_rounds}'
     elif method == "CorBinFLDropout":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_dropout_{args.dropout}_epc{num_rounds}'
+        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_dropout_{args.dropout}_num_clients_{n_clients}_epc{num_rounds}'
     elif method == "CorQuant":
-        Name = f'{method}_{args.dataset}_lmbda_{lambda_param}_epc{num_rounds}'
+        Name = f'{method}_{args.dataset}_lmbda_{lambda_param}_num_clients_{n_clients}_epc{num_rounds}'
     elif method == "CorQuantDropout":
-        Name = f'{method}_{args.dataset}_lmbda_{lambda_param}_dropout_{args.dropout}_epc{num_rounds}'
+        Name = f'{method}_{args.dataset}_lmbda_{lambda_param}_dropout_{args.dropout}_num_clients_{n_clients}_epc{num_rounds}'
     elif method == "VanillaFL":
-        Name = f'{method}_{args.dataset}_epc{num_rounds}'
+        Name = f'{method}_{args.dataset}_num_clients_{n_clients}_epc{num_rounds}'
     elif method == "LDPFLDropout":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_lmbda_{lambda_param}_dropout_{args.dropout}_epc{num_rounds}'
+        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_lmbda_{lambda_param}_dropout_{args.dropout}_num_clients_{n_clients}_epc{num_rounds}'
     else:
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_lmbda_{lambda_param}_epc{num_rounds}'
+        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_lmbda_{lambda_param}_num_clients_{n_clients}_epc{num_rounds}'
 
     print("*" * 50)
     print("Dataset:", args.dataset)
