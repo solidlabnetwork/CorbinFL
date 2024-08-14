@@ -1,6 +1,6 @@
 # Federated Learning with Differential Privacy
 
-This project implements CorBin-FL and Augmented CorBin-FL methods and compare them with other differentially private quantization method (LDP-FL Sun et. al. 2020) and on private quantization method (CorQunt Sures et.al. 2022) and vanilla FL method
+This project implements CorBin-FL and Augmented CorBin-FL methods and compare them with other differentially private quantization method (LDP-FL Sun et. al. 2020) and non-private quantization method (CorQunt Sures et.al. 2022) and vanilla FL method. Also implement Improve Gaussian mechanism and Laplace mechanism for comparison. Implementation of federated learning is on CIFAR10 and MNIST datasets.
 
 ## Features
 
