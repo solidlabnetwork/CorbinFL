@@ -49,6 +49,8 @@ def parse_arguments():
                         help='dropout probability for CorBinDropout')
     parser.add_argument('--lambda_param', type=float, default=1,
                         help='Smoothing parameter for the global model update')
+    parser.add_argument('--batch_size', type=int, default=64,
+                        help='batch size for training')
     return parser.parse_args()
 
 
@@ -63,6 +65,7 @@ def main():
     n_clients = args.num_clients
     num_rounds = args.num_rounds
     epsilon = torch.tensor(args.epsilon, device=device)
+    batch_size = args.batch_size
     alpha = (torch.exp(epsilon) + 1) / (torch.exp(epsilon) - 1)
 
      # raise error if dropout is greater than 1 or less than 0
@@ -90,7 +93,7 @@ def main():
     print(args.dataset)
     data_dir = f'./data/{args.dataset}'
     os.makedirs(data_dir, exist_ok=True)
-    client_dataloaders, val_loader, test_dataloader, _ = load_data(args.dataset, data_dir, n_clients)
+    client_dataloaders, val_loader, test_dataloader, _ = load_data(args.dataset, data_dir, n_clients, batch_size)
     global_model = ResNet18().to(device) if args.dataset == "CIFAR10" else CNNMNIST().to(device)
 
     

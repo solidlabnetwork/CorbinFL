@@ -274,7 +274,7 @@ def compute_sigma_agm(epsilon, delta, sensitivity):
     return alpha * sensitivity / math.sqrt(2 * epsilon)
 
 
-def load_data(dataset_name: str, data_dir: str, n_clients: int):
+def load_data(dataset_name: str, data_dir: str, n_clients: int, batch_size=64):
     if dataset_name.lower() == 'cifar10':
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -303,11 +303,11 @@ def load_data(dataset_name: str, data_dir: str, n_clients: int):
     dict_users = distribute_data_iid(train_dataset, n_clients)
     
     client_dataloaders = [
-        DataLoader(DatasetSubset(train_dataset, dict_users[i]), batch_size=64, shuffle=True)
+        DataLoader(DatasetSubset(train_dataset, dict_users[i]), batch_size=batch_size, shuffle=True)
         for i in range(n_clients)
     ]
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
-    test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
     return client_dataloaders, val_loader, test_dataloader, input_channels
 
