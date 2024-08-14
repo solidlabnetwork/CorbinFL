@@ -215,7 +215,7 @@ def main():
                         sensitivity = 2 * r
                         scale = sensitivity / epsilon
 
-                        noise = torch.distributions.Laplace(loc=0, scale=scale+1e-6).sample(param_data_.shape).to(device)
+                        noise = torch.distributions.Laplace(loc=0, scale=scale+1e-6).sample(param_data_.shape).to(device) # 1e-6 is added to avoid zero probability
                         client_state_dict[key].add_(noise)
                 elif method != "VanillaFL":
                     raise ValueError(f"Unsupported method: {method}")
@@ -278,15 +278,17 @@ def main():
 
     end_time = time.time()
     print(f"Total Training Time: {end_time - start_time:.2f} seconds")
-
-    # Save results
+    
+    # Save results as csv
     results_df = pd.DataFrame(results, columns=["Round", "Train Accuracy", "Test Accuracy"])
     results_df["Total Training Time"] = end_time - start_time
 
     output_dir = 'result'
     os.makedirs(output_dir, exist_ok=True)
-    filename = f"{Name}.xlsx"
-    results_df.to_excel(os.path.join(output_dir, filename), index=False, engine='xlsxwriter')
+    filename = f"{Name}.csv"
+    csv_path = os.path.join(output_dir, filename)
+    results_df.to_csv(csv_path, index=False)
+
 
 if __name__ == "__main__":
     main()
