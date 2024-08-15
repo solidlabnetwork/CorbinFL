@@ -7,7 +7,12 @@ import GPUtil
 
 def setup_device(device_type: str):
     if device_type == "GPU":
-        return select_free_gpu(max_memory_usage=0.5)
+        try:
+            return select_free_gpu(max_memory_usage=0.5)
+        except Exception as e:
+            print(f"Error selecting GPU: {e}")
+            print("No free GPU available. Selecting CPU for processing.")
+            return torch.device("cpu")
     return torch.device("cpu")
 
 def select_free_gpu(max_memory_usage=0.5):
