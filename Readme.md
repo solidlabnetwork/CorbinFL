@@ -18,7 +18,7 @@ This project implements CorBin-FL and Augmented CorBin-FL methods and compare th
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.11+
 - PyTorch
 - torchvision
 - numpy
