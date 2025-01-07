@@ -1,8 +1,8 @@
-import torch.nn.functional as F
-import torch.nn as nn
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
 # Small2VGG Model for MNIST
@@ -115,3 +115,141 @@ class Bottleneck(nn.Module):
 def ResNet18():
     return ResNet(BasicBlock, [2, 2, 2, 2])
 
+
+
+class CharLSTM(nn.Module):
+    def __init__(self):
+        super(CharLSTM, self).__init__()
+        self.embed = nn.Embedding(80, 8)
+        self.lstm = nn.LSTM(8, 256, 2, batch_first=True)
+        self.drop = nn.Dropout()
+        self.out = nn.Linear(256, 80)
+
+    def forward(self, x):
+        x = self.embed(x)
+        x, _ = self.lstm(x)
+        x = self.drop(x)
+        return self.out(x[:, -1, :])  # Take the last output
+    
+
+
+
+class Sent140LSTM(nn.Module):
+    def __init__(self, vocab_size, embedding_dim=300, hidden_dim=100, num_classes=2, seq_len=25, num_layers=2):
+        super(Sent140LSTM, self).__init__()
+        self.embed = nn.Embedding(vocab_size + 1, embedding_dim)  # +1 for unknown token
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers, batch_first=True)
+        self.fc1 = nn.Linear(hidden_dim, 128)
+        self.out = nn.Linear(128, num_classes)
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        x = self.embed(x)  # Embed the input
+        x, _ = self.lstm(x)  # Pass through LSTM
+        x = self.fc1(x[:, -1, :])  # Use the last hidden state
+        x = self.dropout(x)
+        x = self.out(x)  # Final output
+        return x
+    
+
+
+
+class RedditTransformer(nn.Module):
+    def __init__(self, vocab_size, emsize=400, nhead=8, nhid=400, 
+                 nlayers=4, dropout=0.2, max_seq_length=64):
+        super(RedditTransformer, self).__init__()
+        self.model_type = 'Transformer'
+        self.emsize = emsize
+        self.src_mask = None
+        
+        # Embedding layer
+        self.embedding = nn.Embedding(vocab_size, emsize)
+        self.pos_encoder = PositionalEncoding(emsize, dropout, max_seq_length)
+        
+        # Transformer encoder
+        encoder_layers = TransformerEncoderLayer(
+            d_model=emsize,
+            nhead=nhead,
+            dim_feedforward=nhid,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        
+        # Decoder to predict next token
+        self.decoder = nn.Linear(emsize, vocab_size)
+        
+        self.init_weights()
+
+    def generate_square_subsequent_mask(self, sz):
+        """Generate mask for autoregressive prediction"""
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def init_weights(self):
+        initrange = 0.1
+        self.embedding.weight.data.uniform_(-initrange, initrange)
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, src, src_padding_mask=None):
+        """
+        Args:
+            src: Tensor, shape [batch_size, seq_len]
+            src_padding_mask: Optional tensor indicating which elements in src are padding
+                            shape [batch_size, seq_len]
+        Returns:
+            output: Tensor containing log probabilities for next token prediction
+                   shape [batch_size, seq_len, vocab_size]
+        """
+        if self.src_mask is None or self.src_mask.size(0) != src.size(1):
+            mask = self.generate_square_subsequent_mask(src.size(1))
+            self.src_mask = mask.to(src.device)
+            
+        # Embedding and positional encoding
+        src = self.embedding(src) * math.sqrt(self.emsize)  # [batch_size, seq_len, emsize]
+        src = self.pos_encoder(src)
+        
+        # Transformer encoder with masking for autoregressive prediction
+        output = self.transformer_encoder(
+            src, 
+            mask=self.src_mask,
+            src_key_padding_mask=src_padding_mask
+        )
+        
+        # Decode to get next token predictions
+        output = self.decoder(output)  # [batch_size, seq_len, vocab_size]
+        
+        return output
+
+    def get_attention_weights(self):
+        """Returns attention weights from all layers if available"""
+        weights = []
+        for layer in self.transformer_encoder.layers:
+            if hasattr(layer.self_attn, 'attention_weights'):
+                weights.append(layer.self_attn.attention_weights)
+        return weights
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor, shape [batch_size, seq_len, embedding_dim]
+        """
+        x = x + self.pe[:, :x.size(1)]
+        return self.dropout(x)

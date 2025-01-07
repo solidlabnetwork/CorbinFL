@@ -15,25 +15,43 @@ def setup_device(device_type: str):
             return torch.device("cpu")
     return torch.device("cpu")
 
-def select_free_gpu(max_memory_usage=0.5):
-    # Get the list of GPUs
+def select_free_gpu(max_memory_usage=0.5, priority="memory"):
+    """
+    Select a GPU whose memory usage is less than `max_memory_usage`.
+    Among those, either pick the GPU with the lowest load (priority="load")
+    or the one with the lowest memory usage (priority="memory").
+    If no GPU satisfies the memory criterion, pick the GPU with the smallest
+    (memoryUtil, load) among all GPUs.
+    """
     devices = GPUtil.getGPUs()
+    # Filter out GPUs that exceed the memory threshold
     available_gpus = [i for i in range(len(devices)) if devices[i].memoryUtil < max_memory_usage]
-    if len(available_gpus) ==0:
-        print(f"No available GPU with memory usage < {max_memory_usage}")
-        selected_gpu = sorted(devices, key=lambda x: (x.memoryUtil, x.load))[0].id
 
-    else: 
-        available_gpu_loads = [devices[i].load for i in available_gpus]
-        print(f"Available GPUs with memory usage < {int(max_memory_usage*100)}%: {available_gpus} ")
-        print(f"GPU loads: {available_gpu_loads}")
-        min_load = min(available_gpu_loads)
-        min_load_index = available_gpu_loads.index(min_load)
-        selected_gpu = available_gpus[min_load_index]
-    print(f"Selected GPU: {selected_gpu} (memory = {devices[selected_gpu].memoryUtil*100}%, load  {devices[selected_gpu].load*100}%)")
-            # Set the selected GPU as the default device
-    device = torch.device(f"cuda:{selected_gpu}" if torch.cuda.is_available() else "cpu")
-    return device
+    if not available_gpus:
+        print(f"No available GPU with memory usage < {max_memory_usage*100:.0f}%.")
+        # Fallback: pick GPU with smallest memory usage, then load
+        selected_gpu = sorted(devices, key=lambda x: (x.memoryUtil, x.load))[0].id
+    else:
+        print(f"GPUs below {max_memory_usage*100:.0f}% memory usage: {available_gpus}")
+        if priority == "memory":
+            # Pick the GPU with the *lowest memory usage* among the filtered set
+            mem_util_values = [devices[i].memoryUtil for i in available_gpus]
+            min_mem = min(mem_util_values)
+            min_mem_index = mem_util_values.index(min_mem)
+            selected_gpu = available_gpus[min_mem_index]
+        else:
+            # Priority="load": pick the GPU with the *lowest load*
+            gpu_loads = [devices[i].load for i in available_gpus]
+            min_load = min(gpu_loads)
+            min_load_index = gpu_loads.index(min_load)
+            selected_gpu = available_gpus[min_load_index]
+    
+    chosen = devices[selected_gpu]
+    print(f"Selected GPU: {selected_gpu} "
+          f"(memory={chosen.memoryUtil*100:.1f}%, "
+          f"load={chosen.load*100:.1f}%)")
+    
+    return torch.device(f"cuda:{selected_gpu}" if torch.cuda.is_available() else "cpu")
 
 def validate(model, val_loader, criterion, device='cpu'):
     model.eval()

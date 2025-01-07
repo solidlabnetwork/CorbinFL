@@ -146,7 +146,8 @@ def main():
         else:
             client_pairing = [i for i in range(n_clients)]
         client_assignment_r = client_assignment(n_clients, method, gamma=Gamma, dropout=dropout, device=device)
-
+        # print client pairing
+        # print(f"Round {round + 1}, Client Pxairing: {client_pairing}")
         if "CorQuant" in method:
             pi_dict = {}
             for k in c_r_keys:

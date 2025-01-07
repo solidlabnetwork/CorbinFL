@@ -13,19 +13,29 @@ import torch.nn.functional as F
 import numpy as np
 import math
 from scipy import optimize
+from dataloaders.mnist import MNISTDataLoader
+from dataloaders.cifar10 import CIFAR10DataLoader
+from dataloaders.shakespeare import ShakespeareDataLoader
+from dataloaders.sentiment140 import Sent140DataLoader
+from dataloaders.reddit import RedditDataLoader
 
 # device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
-def train_on_client(client_model, dataloader, epochs=1, lr=0.01, weight_decay=0.001, device='cpu'):
-    
-    optimizer = optim.Adam(client_model.parameters(), lr=lr, weight_decay=weight_decay)
+def train_on_client(client_model, dataloader, epochs=1, lr=0.001, weight_decay=0.003, device='cpu'):
+    optimizer = torch.optim.Adam(client_model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
     client_model.train()
-    for _ in range(epochs):
-        for images, labels in dataloader:
-            images, labels = images.to(device), labels.to(device)
+    
+    for epoch in range(epochs):
+        for batch_idx, (inputs, targets) in enumerate(dataloader):
+            # Move to device - inputs shape: [batch_size, sequence_length], targets shape: [batch_size]
+            inputs, targets = inputs.to(device), targets.to(device)
+            
+            # Forward pass
             optimizer.zero_grad()
-            outputs = client_model(images)
-            loss = criterion(outputs, labels)
+            outputs = client_model(inputs)  # Expected output shape: [batch_size, vocab_size]
+            
+            # Compute loss
+            loss = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
 
@@ -64,7 +74,7 @@ def federated_learning_pairing(num_clients):
             idx_j = output.index(pairs[i][1])
             output[idx_i], output[idx_j] = output[idx_j], output[idx_i]
     
-    output = range(num_clients)
+    # output = range(num_clients)
     return output # returen a vector [leader1, follower1, leader2, follower2, ...]
 
 
@@ -274,61 +284,61 @@ def compute_sigma_agm(epsilon, delta, sensitivity):
     return alpha * sensitivity / math.sqrt(2 * epsilon)
 
 
-def load_data(dataset_name: str, data_dir: str, n_clients: int, batch_size=64):
-    if dataset_name.lower() == 'cifar10':
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
-        ])
-        train_dataset = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=transform)
-        test_dataset = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=True, transform=transform)
-        input_channels = 3
-    elif dataset_name.lower() == 'mnist':
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])
-        train_dataset = torchvision.datasets.MNIST(root=data_dir, train=True, download=True, transform=transform)
-        test_dataset = torchvision.datasets.MNIST(root=data_dir, train=False, download=True, transform=transform)
-        input_channels = 1
-    else:
+
+def load_data(dataset_name: str, data_dir: str, n_clients: int, batch_size=64, iid=True):
+    """Load and prepare dataset for federated learning
+    
+    Args:
+        dataset_name (str): Name of the dataset ('mnist', 'cifar10', or 'shakespeare')
+        data_dir (str): Directory path for dataset
+        n_clients (int): Number of clients for federated learning
+        batch_size (int): Batch size for dataloaders
+        iid (bool): Whether to use IID data distribution (for Shakespeare dataset)
+    
+    Returns:
+        tuple: (client_dataloaders, val_loader, test_dataloader, input_channels)
+    """
+    dataset_loaders = {
+        'mnist': MNISTDataLoader,
+        'cifar10': CIFAR10DataLoader,
+        'shakespeare': ShakespeareDataLoader,
+        'sent140': Sent140DataLoader,
+        'reddit': RedditDataLoader
+    }
+    
+    dataset_name = dataset_name.lower()
+    if dataset_name not in dataset_loaders:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
-
-    # Splitting the training dataset for training and validation
-    train_size = int(0.8 * len(train_dataset))
-    val_size = len(train_dataset) - train_size
-    train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
-
-    # IID distribution among clients
-    dict_users = distribute_data_iid(train_dataset, n_clients)
     
-    client_dataloaders = [
-        DataLoader(DatasetSubset(train_dataset, dict_users[i]), batch_size=batch_size, shuffle=True)
-        for i in range(n_clients)
-    ]
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    # Initialize the appropriate dataloader
+    dataloader = dataset_loaders[dataset_name](
+        data_dir=data_dir,
+        n_clients=n_clients,
+        batch_size=batch_size,
+        iid=iid
+    )
     
-    return client_dataloaders, val_loader, test_dataloader, input_channels
+    # Load and prepare the data
+    return dataloader.load_data()
 
-def distribute_data_iid(dataset, num_users):
-    num_items = int(len(dataset) / num_users)
-    all_idxs = np.arange(len(dataset))
-    np.random.shuffle(all_idxs)
-    dict_users = {i: set(all_idxs[i * num_items:(i + 1) * num_items]) for i in range(num_users)}
-    return dict_users
+# def distribute_data_iid(dataset, num_users):
+#     num_items = int(len(dataset) / num_users)
+#     all_idxs = np.arange(len(dataset))
+#     np.random.shuffle(all_idxs)
+#     dict_users = {i: set(all_idxs[i * num_items:(i + 1) * num_items]) for i in range(num_users)}
+#     return dict_users
 
-class DatasetSubset(Dataset):
-    def __init__(self, dataset, indices):
-        self.dataset = dataset
-        self.indices = list(indices)
+# class DatasetSubset(Dataset):
+#     def __init__(self, dataset, indices):
+#         self.dataset = dataset
+#         self.indices = list(indices)
 
-    def __len__(self):
-        return len(self.indices)
+#     def __len__(self):
+#         return len(self.indices)
 
-    def __getitem__(self, idx):
-        data_idx = self.indices[idx]
-        return self.dataset[data_idx]
+#     def __getitem__(self, idx):
+#         data_idx = self.indices[idx]
+#         return self.dataset[data_idx]
 
 def load_checkpoint(checkpoint_path: str, global_model: nn.Module):
     if os.path.exists(checkpoint_path):
@@ -342,19 +352,19 @@ def load_checkpoint(checkpoint_path: str, global_model: nn.Module):
         counter = checkpoint['counter']
         best_accuracy = checkpoint['best_val_accuracy']
         
-        # Restore the saved states if they exist
-        for state_name in ['torch_rng_state', 'cuda_rng_state', 'numpy_rng_state', 'python_rng_state']:
-            if state_name in checkpoint:
-                if state_name == 'torch_rng_state':
-                    torch.set_rng_state(checkpoint[state_name])
-                elif state_name == 'cuda_rng_state':
-                    torch.cuda.set_rng_state_all(checkpoint[state_name])
-                elif state_name == 'numpy_rng_state':
-                    np.random.set_state(checkpoint[state_name])
-                elif state_name == 'python_rng_state':
-                    random.setstate(checkpoint[state_name])
-            else:
-                print(f"No {state_name} found in the checkpoint.")
+        # # Restore the saved states if they exist
+        # for state_name in ['torch_rng_state', 'cuda_rng_state', 'numpy_rng_state', 'python_rng_state']:
+        #     if state_name in checkpoint:
+        #         if state_name == 'torch_rng_state':
+        #             torch.set_rng_state(checkpoint[state_name])
+        #         elif state_name == 'cuda_rng_state':
+        #             torch.cuda.set_rng_state_all(checkpoint[state_name])
+        #         elif state_name == 'numpy_rng_state':
+        #             np.random.set_state(checkpoint[state_name])
+        #         elif state_name == 'python_rng_state':
+        #             random.setstate(checkpoint[state_name])
+        #     else:
+        #         print(f"No {state_name} found in the checkpoint.")
         
         return start_round, accuracy_list, train_accuracy_list, results, counter, best_accuracy
     
