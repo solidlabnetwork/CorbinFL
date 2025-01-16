@@ -15,31 +15,105 @@ import math
 from scipy import optimize
 from dataloaders.mnist import MNISTDataLoader
 from dataloaders.cifar10 import CIFAR10DataLoader
-from dataloaders.shakespeare import ShakespeareDataLoader
+from dataloaders.shakespeare_IID import ShakespeareDataLoader
 from dataloaders.sentiment140 import Sent140DataLoader
 from dataloaders.reddit import RedditDataLoader
 
-# device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
-def train_on_client(client_model, dataloader, epochs=1, lr=0.001, weight_decay=0.003, device='cpu'):
+
+def train_on_client(client_model, dataloader, epochs=1, lr=0.001, weight_decay=0.003, 
+                   device='cpu', compute_gradients=False, 
+                   momentum_state=None, beta=0.9, dataset_name='mnist'): 
+    """
+    Train a client model and return either the updated model or the accumulated gradients
+    
+    Args:
+        compute_gradients (bool): If True, return gradients instead of updated model
+    Returns:
+        If compute_gradients=True: Dictionary of accumulated gradients
+        If compute_gradients=False: Updated model
+    
+    Train client model and handle momentum at client level
+    
+    Args:
+        momentum_state: Current momentum state for this client
+        beta: Momentum constant β from algorithm
+    """
     optimizer = torch.optim.Adam(client_model.parameters(), lr=lr, weight_decay=weight_decay)
-    criterion = nn.CrossEntropyLoss()
+    
+    # Check if it's Reddit dataset
+    is_reddit = dataset_name.lower() == 'reddit'
+    criterion = (nn.CrossEntropyLoss(ignore_index=dataloader.dataset.pad_idx) 
+                if is_reddit else nn.CrossEntropyLoss())
+    
     client_model.train()
     
+    # Initialize gradient accumulation if needed
+    if compute_gradients:
+        # Initialize gradient accumulation
+        gradient_dict = {}
+        for name, param in client_model.named_parameters():
+            if param.requires_grad:
+                gradient_dict[name] = torch.zeros_like(param.data)
+                
+        # Initialize momentum if not provided
+        if momentum_state is None:
+            momentum_state = {}
+            for name, param in client_model.named_parameters():
+                if param.requires_grad:
+                    momentum_state[name] = torch.zeros_like(param.data)
+    
     for epoch in range(epochs):
-        for batch_idx, (inputs, targets) in enumerate(dataloader):
-            # Move to device - inputs shape: [batch_size, sequence_length], targets shape: [batch_size]
+        for batch_idx, batch in enumerate(dataloader):
+            # Handle different dataset formats
+            if isinstance(batch, (tuple, list)):
+                inputs, targets = batch[0], batch[1]
+            else:
+                inputs, targets = batch
+                
             inputs, targets = inputs.to(device), targets.to(device)
             
-            # Forward pass
+            # Zero gradients for this batch
             optimizer.zero_grad()
-            outputs = client_model(inputs)  # Expected output shape: [batch_size, vocab_size]
             
-            # Compute loss
+            # Forward pass
+            if is_reddit:
+                padding_mask = (inputs == dataloader.dataset.pad_idx)
+                outputs = client_model(inputs, src_padding_mask=padding_mask)
+                outputs = outputs.contiguous().view(-1, outputs.size(-1))
+                targets = targets.contiguous().view(-1)
+            else:
+                outputs = client_model(inputs)
+            
+            # Compute loss and backpropagate
             loss = criterion(outputs, targets)
             loss.backward()
-            optimizer.step()
+            
+            if compute_gradients:
+                # Accumulate gradients
+                for name, param in client_model.named_parameters():
+                    if param.requires_grad and param.grad is not None:
+                        gradient_dict[name] += param.grad.data
+            else:
+                optimizer.step()
+    
+    if compute_gradients:
+        # Average gradients over batches
+        num_batches = len(dataloader)
+        for name in gradient_dict:
+            gradient_dict[name] /= num_batches
+            
+            # Update momentum according to algorithm:
+            # vm ← (1-β)g̃m + βvm
+            momentum_state[name] = ((1 - beta) * gradient_dict[name] + 
+                                  beta * momentum_state[name])
+            
+            # Return sign of momentum
+            gradient_dict[name] = torch.sign(momentum_state[name])
+            
+        return gradient_dict, momentum_state  # Return both updated gradient signs and momentum
+    else:
+        return client_model, None # Return updated model
 
-    return client_model
 
 def compute_center_and_range(model, device='cpu'):
     C, R = [], []

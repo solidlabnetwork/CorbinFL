@@ -1,18 +1,31 @@
+# corbin_fl.py
 import torch
 from .base import FederatedMethod
 from main_dp_func import federated_learning_pairing
 
 
 class CorBinFL(FederatedMethod):
-    def __init__(self, epsilon, num_rand, lambda_param=1, dropout=0, device='cuda'):
-        super().__init__(epsilon=epsilon, num_rand=num_rand, lambda_param=lambda_param, 
-                        dropout=dropout, device=device)
+    def __init__(self, epsilon, num_rand, lambda_param=1, dropout=0,
+                 use_adam=False, beta1=0.9, beta2=0.999, lr=0.001, eps=1e-8,
+                 device='cuda'):
+        super().__init__(
+            epsilon=epsilon,
+            num_rand=num_rand,
+            lambda_param=lambda_param,
+            dropout=dropout,
+            use_adam=use_adam,
+            beta1=beta1,
+            beta2=beta2,
+            lr=lr,
+            eps=eps,
+            device=device
+        )
         self.alpha = (torch.exp(torch.tensor(epsilon)) + 1) / (torch.exp(torch.tensor(epsilon)) - 1)
         
     def initialize_round(self, n_clients, global_model):
         """Initialize variables for the round, including client pairing and CR generation"""
         self.n_clients = n_clients
-        
+        self._initialize_adam(global_model)
         # Use your existing federated_learning_pairing function
         client_ordering = federated_learning_pairing(n_clients)
         # print(f"New client ordering this round: {client_ordering}")

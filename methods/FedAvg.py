@@ -1,3 +1,4 @@
+# FedAvg.py
 import torch
 from .base import FederatedMethod
 from main_dp_func import federated_learning_pairing
@@ -39,23 +40,30 @@ class FedAvg(FederatedMethod):
         
         return client_state_dict
     
-    def aggregate_updates(self, global_state_dict, local_models):
-        """Aggregate updates using standard FedAvg averaging"""
-        if not local_models:  # If no local models available
+    def aggregate_updates(self, global_state_dict, local_models, weights=None):
+        """Aggregate updates using weighted FedAvg averaging"""
+        if not local_models:
             return global_state_dict
-            
-        aggregated_state_dict = {}
-        total_models = len(local_models)
         
-        # Simple average of all parameters
+        # Use equal weights if none provided
+        if weights is None:
+            weights = [1.0 / len(local_models)] * len(local_models)
+        
+        # Normalize weights
+        weights = torch.tensor(weights, device=self.device)
+        weights = weights / weights.sum()
+        
+        aggregated_state_dict = {}
+        
         for key in global_state_dict.keys():
-            if 'num_batches_tracked' in key:  # Skip batch norm statistics
+            if 'num_batches_tracked' in key:
                 aggregated_state_dict[key] = global_state_dict[key]
                 continue
-            
-            # Stack all local model parameters and take mean
+                
+            # Weighted average of parameters
             aggregated_state_dict[key] = torch.stack([
-                local_state_dict[key] for local_state_dict in local_models
-            ]).mean(dim=0)
+                w * local_state_dict[key] 
+                for w, local_state_dict in zip(weights, local_models)
+            ]).sum(dim=0)
         
         return aggregated_state_dict

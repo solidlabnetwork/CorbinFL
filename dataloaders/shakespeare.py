@@ -8,42 +8,41 @@ import torch
 from .base import BaseDataLoader, DatasetSubset
 
 class ShakespeareDataset(Dataset):
-    def __init__(self, data_dir, train=True, iid=False, num_clients=None):
+    def __init__(self, data_dir, train=True, iid=False, num_clients=None, selected_clients=None, client_data=None):
         super().__init__()
-        train_dir = os.path.join(data_dir, 'train')
-        test_dir = os.path.join(data_dir, 'test')
         
-        # Read data first
-        self.train_clients, _, self.train_data, self.test_data = self._read_data(train_dir, test_dir)
-        self.train = train
-        self.iid = iid
-        self.num_clients = num_clients if num_clients else len(self.train_clients)
-        
-        # Create vocabulary before preparing data
-        self._create_vocabulary()
-        
-        # Prepare data after vocabulary is created
-        if self.train:
-            self.data, self.labels, self.client_indices = self._prepare_training_data()
+        if client_data is not None:
+            # If client data is provided, use it directly
+            self.data = client_data['x']
+            self.labels = client_data['y']
+            self.train_clients = []
+            self.train_data = {}
+            self.test_data = {}
         else:
-            self.data, self.labels = self._prepare_test_data()
+            # Otherwise load from files
+            train_dir = os.path.join(data_dir, 'train')
+            test_dir = os.path.join(data_dir, 'test')
+            
+            # Read data first
+            self.train_clients, _, self.train_data, self.test_data = self._read_data(train_dir, test_dir)
+            self.train = train
+            
+            # Prepare data
+            if self.train:
+                self.data, self.labels = self._prepare_training_data()
+            else:
+                self.data, self.labels = self._prepare_test_data()
+        
+        # Create vocabulary after data is prepared
+        self._create_vocabulary()
 
     def _create_vocabulary(self):
         """Create vocabulary from all available data (train and test)"""
         all_chars = set()
         
-        # Collect characters from training data
-        for client in self.train_clients:
-            # Add characters from input sequences
-            if self.train_data[client] is not None:
-                all_chars.update(''.join(self.train_data[client]['x']))
-                # Add characters from labels
-                all_chars.update(''.join(str(c) for c in self.train_data[client]['y']))
-            
-            # Add characters from test data
-            if self.test_data[client] is not None:
-                all_chars.update(''.join(self.test_data[client]['x']))
-                all_chars.update(''.join(str(c) for c in self.test_data[client]['y']))
+        # Add characters from current data
+        all_chars.update(''.join(self.data))
+        all_chars.update(''.join(str(c) for c in self.labels))
         
         # Add special tokens
         special_tokens = {'<PAD>', '<UNK>'}
@@ -81,36 +80,14 @@ class ShakespeareDataset(Dataset):
         return train_clients, train_groups, train_data, test_data
 
     def _prepare_training_data(self):
-        """Now only handles IID split"""
+        """Prepare training data"""
         all_data = []
         all_labels = []
-        
-        # Collect all data from all clients
         for client in self.train_clients:
             if self.train_data[client] is not None:
                 all_data.extend(self.train_data[client]['x'])
                 all_labels.extend(self.train_data[client]['y'])
-                
-        # Shuffle data
-        indices = list(range(len(all_data)))
-        np.random.shuffle(indices)
-        
-        # Split data evenly among clients
-        samples_per_client = len(indices) // self.num_clients
-        remaining_samples = len(indices) % self.num_clients
-        client_indices = {}
-        
-        current_idx = 0
-        for i in range(self.num_clients):
-            # Distribute remaining samples evenly
-            extra_sample = 1 if i < remaining_samples else 0
-            client_size = samples_per_client + extra_sample
-            
-            end_idx = current_idx + client_size
-            client_indices[i] = set(range(current_idx, end_idx))
-            current_idx = end_idx
-                
-        return [all_data[i] for i in indices], [all_labels[i] for i in indices], client_indices
+        return all_data, all_labels
     
     def _prepare_test_data(self):
         """Prepare test data"""
@@ -155,38 +132,99 @@ class ShakespeareDataset(Dataset):
         """Convert a sequence of indices back to characters"""
         return ''.join(self.idx_to_char.get(idx.item(), '<UNK>') for idx in indices)
 
-class ShakespeareDataLoader(BaseDataLoader):
-    def __init__(self, data_dir: str, n_clients: int, batch_size: int, iid: bool = True):
-        super().__init__(data_dir, n_clients, batch_size, iid)
 
-    def load_data(self):
-        # Load datasets
-        train_dataset = ShakespeareDataset(
-            data_dir=self.data_dir,
-            train=True,
-            iid=self.iid,
-            num_clients=self.n_clients
-        )
-        test_dataset = ShakespeareDataset(
+class ShakespeareNonIIDDataLoader(BaseDataLoader):
+    def __init__(self, data_dir: str, n_clients: int, batch_size: int):
+        super().__init__(data_dir, n_clients, batch_size, iid=False)
+        
+        # Load all data once during initialization
+        train_dir = os.path.join(data_dir, 'train')
+        test_dir = os.path.join(data_dir, 'test')
+        
+        # Read all data and store it
+        self.train_clients, _, self.train_data, self.test_data = self._read_data(train_dir, test_dir)
+        
+        # Create and split test dataset once
+        self.test_dataset = ShakespeareDataset(
             data_dir=self.data_dir,
             train=False
         )
-
-        # Split test into validation and test
-        test_size = len(test_dataset)
+        
+        # Split test into validation and test once
+        test_size = len(self.test_dataset)
         val_size = int(0.2 * test_size)
         test_size = test_size - val_size
-        val_dataset, test_dataset = random_split(test_dataset, [val_size, test_size])
+        self.val_dataset, self.test_dataset = random_split(self.test_dataset, [val_size, test_size])
+        
+        # Create fixed val and test loaders
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False)
+        self.test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False)
 
-        # Create dataloaders using client indices from dataset
-        train_loaders = [
-            DataLoader(
-                DatasetSubset(train_dataset, train_dataset.client_indices[i]),
-                batch_size=self.batch_size,
-                shuffle=True
-            ) for i in range(self.n_clients)
-        ]
-        val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
-        test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False)
+    def _read_data(self, train_dir, test_dir):
+        """Read data from json files"""
+        def read_dir(data_dir):
+            clients = []
+            groups = []
+            data = defaultdict(lambda: None)
+            
+            files = [f for f in os.listdir(data_dir) if f.endswith('.json')]
+            for f in files:
+                file_path = os.path.join(data_dir, f)
+                with open(file_path, 'r') as inf:
+                    cdata = json.load(inf)
+                clients.extend(cdata['users'])
+                if 'hierarchies' in cdata:
+                    groups.extend(cdata['hierarchies'])
+                data.update(cdata['user_data'])
+            
+            return sorted(list(set(clients))), groups, data
 
-        return train_loaders, val_loader, test_loader, None  # None for text data
+        train_clients, train_groups, train_data = read_dir(train_dir)
+        test_clients, test_groups, test_data = read_dir(test_dir)
+        
+        return train_clients, train_groups, train_data, test_data
+
+    def load_data(self):
+        """Load data for randomly selected clients"""
+        # Randomly select n_clients
+        selected_clients = np.random.choice(
+            self.train_clients,
+            size=min(self.n_clients, len(self.train_clients)),
+            replace=False
+        ).tolist()
+        
+        # Create train loaders for selected clients
+        train_loaders = []
+        client_weights = []
+        total_samples = 0
+        
+        # First pass to calculate total samples
+        for client in selected_clients:
+            if self.train_data[client] is not None:
+                total_samples += len(self.train_data[client]['y'])
+        
+        # Second pass to create loaders and calculate weights
+        for client in selected_clients:
+            if self.train_data[client] is not None:
+                client_dataset = ShakespeareDataset(
+                    data_dir=self.data_dir,
+                    train=True,
+                    client_data={
+                        'x': self.train_data[client]['x'],
+                        'y': self.train_data[client]['y']
+                    }
+                )
+                
+                train_loaders.append(
+                    DataLoader(
+                        client_dataset,
+                        batch_size=self.batch_size,
+                        shuffle=True
+                    )
+                )
+                
+                # Calculate weight based on number of samples
+                weight = len(self.train_data[client]['y']) / total_samples
+                client_weights.append(weight)
+        
+        return train_loaders, self.val_loader, self.test_loader, client_weights, None

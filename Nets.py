@@ -9,11 +9,11 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 class CNNMNIST(nn.Module):
     def __init__(self):
         super(CNNMNIST, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1) #32*9
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)# 32*64*9
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(64 * 7 * 7, 128)
+        self.fc1 = nn.Linear(64 * 7 * 7, 128)# 64*7*7*128
         self.fc2 = nn.Linear(128, 10)
 
     def forward(self, x):
@@ -24,6 +24,33 @@ class CNNMNIST(nn.Module):
         x = self.dropout(x)
         x = self.fc2(x)
         return x
+
+
+
+
+class CNNEMNIST(nn.Module):
+    def __init__(self, num_classes=62):
+        super(CNNEMNIST, self).__init__()
+        # Convolutional layers
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=5, padding=2)  # Same padding
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=5, padding=2)
+        # Pooling layer
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        # Fully connected layers
+        self.fc1 = nn.Linear(64 * 7 * 7, 2048)
+        self.fc2 = nn.Linear(2048, num_classes)
+
+    def forward(self, x):
+        # Convolution + ReLU + Pooling layers
+        x = self.pool(F.relu(self.conv1(x)))  # [batch_size, 32, 14, 14]
+        x = self.pool(F.relu(self.conv2(x)))  # [batch_size, 64, 7, 7]
+        # Flatten the tensor
+        x = x.view(-1, 64 * 7 * 7)
+        # Fully connected layers with ReLU activation
+        x = F.relu(self.fc1(x))  # [batch_size, 2048]
+        x = self.fc2(x)          # [batch_size, num_classes]
+        return x
+
 
 
 # BasicBlock for ResNet18
@@ -161,6 +188,7 @@ class RedditTransformer(nn.Module):
         self.model_type = 'Transformer'
         self.emsize = emsize
         self.src_mask = None
+        self.vocab_size = vocab_size
         
         # Embedding layer
         self.embedding = nn.Embedding(vocab_size, emsize)
@@ -198,29 +226,38 @@ class RedditTransformer(nn.Module):
         Args:
             src: Tensor, shape [batch_size, seq_len]
             src_padding_mask: Optional tensor indicating which elements in src are padding
-                            shape [batch_size, seq_len]
-        Returns:
-            output: Tensor containing log probabilities for next token prediction
-                   shape [batch_size, seq_len, vocab_size]
+                        shape [batch_size, seq_len]
         """
+        
+        
+        # Generate square attention mask
         if self.src_mask is None or self.src_mask.size(0) != src.size(1):
+            device = src.device
             mask = self.generate_square_subsequent_mask(src.size(1))
-            self.src_mask = mask.to(src.device)
-            
+            self.src_mask = mask.to(device)
+
+        # Create padding mask if None provided
+        if src_padding_mask is None:
+            src_padding_mask = (src == self.pad_idx)
+        
+        
+        # print("src min:", src.min().item(), "src max:", src.max().item())
+        assert src.min() >= 0, "Found a negative token!"
+        assert src.max() < self.vocab_size, "Found a token >= vocab_size!"
+
+        
         # Embedding and positional encoding
-        src = self.embedding(src) * math.sqrt(self.emsize)  # [batch_size, seq_len, emsize]
+        src = self.embedding(src) * math.sqrt(self.emsize)
         src = self.pos_encoder(src)
         
-        # Transformer encoder with masking for autoregressive prediction
+        # Apply transformer encoder
         output = self.transformer_encoder(
             src, 
             mask=self.src_mask,
-            src_key_padding_mask=src_padding_mask
+            src_key_padding_mask=src_padding_mask if src_padding_mask.any() else None
         )
         
-        # Decode to get next token predictions
-        output = self.decoder(output)  # [batch_size, seq_len, vocab_size]
-        
+        output = self.decoder(output)
         return output
 
     def get_attention_weights(self):

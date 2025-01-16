@@ -16,6 +16,8 @@ and creates a vocabulary file (reddit_vocab.pck) containing:
     'pad_symbol': 0,
     'unk_symbol': 1
 }
+How to run:
+python Reddit_vocab_creation.py --vocab-size 10000 --data-dir reddit_leaf/train
 """
 
 import argparse
@@ -84,7 +86,7 @@ def build_vocab(counter: Counter, vocab_size: int) -> Dict:
     count_pairs = sorted(counter.items(), key=lambda x: (-x[1], x[0]))
     
     # Select top tokens (leaving room for PAD and UNK)
-    count_pairs = count_pairs[:(vocab_size - 2)]
+    count_pairs = count_pairs[:(vocab_size - 1)]
     
     # Extract words (discarding counts)
     words = [word for word, _ in count_pairs]
@@ -96,13 +98,17 @@ def build_vocab(counter: Counter, vocab_size: int) -> Dict:
     }
     
     # Add words with indices starting after PAD and UNK
-    for idx, word in enumerate(words):
-        if word != '<PAD>':  # Avoid duplicate PAD token
-            vocab[word] = idx + 2  # +2 to account for PAD and UNK
-            
+    current_idx = 2  # Start from 2 after PAD and UNK
+    for word, _ in count_pairs:
+        if word not in ['<PAD>', '<UNK>']:  # Skip both special tokens
+            vocab[word] = current_idx
+            current_idx += 1
+
+    final_size = len(vocab)
+     
     return {
         'vocab': vocab,
-        'size': vocab_size,
+        'size': final_size,
         'pad_symbol': pad_symbol,
         'unk_symbol': unk_symbol
     }

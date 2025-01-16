@@ -6,11 +6,15 @@ data/MNIST/MNIST/
 data/MNIST/raw/
 data/Reddit/reddit_leaf/
 data/Reddit/reddit_vocab.pck
+data/Reddit/client_data/
 data/Sent140/glove/
 data/Sent140/sentiment140/
 data/Sent140/embs.json
 data/Shakespeare/test/
 data/Shakespeare/train/
+data/FEMNIST/all_data
+data/FEMNIST/raw_data
+data/FEMNIST/intermediate
 FL_test_env/
 old_codes/
 result/

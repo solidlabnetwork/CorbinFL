@@ -1,9 +1,9 @@
-# federated_trainer.py
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import List, Optional, Tuple
 import time
+from methods.signsgd import SignSGD
 
 from main_dp_func import (
     compute_center_and_range,
@@ -28,6 +28,7 @@ class FederatedTrainer:
         eval_every: int = 1,
         lr: float = 0.001,
         weight_decay: float = 0.0,
+        data_loader: object = None,
     ):
         self.method = method
         self.model = model
@@ -40,36 +41,44 @@ class FederatedTrainer:
         self.num_rounds = num_rounds
         self.checkpoint_path = checkpoint_path
         self.eval_every = eval_every
-        self.criteria = nn.CrossEntropyLoss()
         self.lr = lr
         self.weight_decay = weight_decay
+        self.data_loader = data_loader
+        self.client_momentums = {} # Store client momentum states
         
+        if self.dataset_name == 'reddit':
+            self.criteria = nn.CrossEntropyLoss(ignore_index=val_loader.dataset.pad_idx)
+        else:
+            self.criteria = nn.CrossEntropyLoss()
+
     def train_round(self, round_num: int) -> Optional[Tuple[float, float, float]]:
         round_start_time = time.time() 
         torch.cuda.empty_cache()
         
-        # # Add debug print at the start
-        # print("\nModel parameter names:")
-        # for name, param in self.model.named_parameters():
-        #     print(f"{name}: {param.shape}")
-
-        # Get parameters that need perturbation
-        params_to_perturb = []
-        param_shapes = []
-        for name, param in self.model.named_parameters():
-            if 'weight' in name or 'bias' in name:
-                # print(f"{name}: {param.shape}")
-                params_to_perturb.append(param)
-                param_shapes.append(param.shape)
+    
         
         # Compute center and range for each layer
         C, R = compute_center_and_range(self.model, self.device)
         global_state_dict = self.model.state_dict()
         
-        # Initialize round-specific data
-        round_data = self.method.initialize_round(len(self.train_loaders), self.model)
-        client_ordering = round_data['client_ordering']  # Get the shuffled client order
+        # Initialize weighted sum dictionary with zeros
+        weighted_sum = {}
+        for key in global_state_dict:
+            weighted_sum[key] = torch.zeros_like(global_state_dict[key], device=self.device)
         
+        # For FEMNIST and shakespeare nonIID, get new clients each round
+        if self.dataset_name.lower() in ['femnist', 'shakespeare'] and self.data_loader is not None:
+            self.train_loaders, _, _, self.client_weights, _ = self.data_loader.load_data()
+        
+        # Initialize round-specific data
+        n_clients = len(self.train_loaders) if self.data_loader is None else self.data_loader.n_clients
+        round_data = self.method.initialize_round(n_clients, self.model)
+        client_ordering = round_data['client_ordering']
+
+        # check if the method is gradient based
+        is_gradient_based = isinstance(self.method, (SignSGD))
+
+
         
         # Create mapping from parameter index to state_dict key
         param_to_key = {}
@@ -80,37 +89,44 @@ class FederatedTrainer:
                 idx += 1
         
         # Local training - process clients in batches
-        local_models = []
         client_batch_size = 50
-        n_clients = len(self.train_loaders)
         
         for client_batch_start in range(0, n_clients, client_batch_size):
             client_batch_end = min(client_batch_start + client_batch_size, n_clients)
-            batch_updates = []
             
             for i in range(client_batch_start, client_batch_end):
-                # client_model = type(self.model)().to(self.device)
                 client_model = self.model_creator(self.device)
                 client_model.load_state_dict(global_state_dict)
-                # Use the correct dataset based on client ordering
-                actual_client_idx = client_ordering[i]  # Get the actual client index
+                actual_client_idx = client_ordering[i]
+                # Get client's momentum state
+                momentum_state = self.client_momentums.get(actual_client_idx)
 
-                # Train client model
-                client_model = train_on_client(
+                # Get appropriate loader based on dataset type
+                if self.dataset_name == 'reddit':
+                    client_loader = self.data_loader.get_client_dataloader(actual_client_idx)
+                else:
+                    client_loader = self.train_loaders[actual_client_idx]
+
+                # Train on client
+                client_update, new_momentum = train_on_client(
                     client_model, 
-                    self.train_loaders[actual_client_idx],
+                    client_loader,
                     device=self.device,
-                    lr = self.lr,
-                    weight_decay = self.weight_decay,
+                    lr=self.lr,
+                    weight_decay=self.weight_decay,
+                    compute_gradients=is_gradient_based,
+                    momentum_state=momentum_state,
+                    beta=self.method.beta if isinstance(self.method, (SignSGD)) else None,
+                    dataset_name=self.dataset_name
+                      # Get beta from SignSGD method
                 )
+                # Store updated momentum
+                if is_gradient_based:
+                    self.client_momentums[actual_client_idx] = new_momentum
                 
-                # Convert model state dict for processing
-                client_state = client_model.state_dict()
-                
-                
-                # Process client update with correct parameter indexing
+                # Process client update
                 processed_state_dict = self.method.process_client_update(
-                    client_state,
+                    client_update if is_gradient_based else client_model.state_dict(),
                     i,
                     {param_to_key[idx]: c for idx, c in enumerate(C)},
                     {param_to_key[idx]: r for idx, r in enumerate(R)},
@@ -118,65 +134,103 @@ class FederatedTrainer:
                 )
                 
                 if processed_state_dict is not None:
-                    batch_updates.append(processed_state_dict)
+                    # Get client weight
+                    if hasattr(self, 'client_weights') and is_gradient_based==False:
+                        weight = self.client_weights[actual_client_idx]
+                    elif is_gradient_based:
+                        weight = 1.0
+                    else:
+                        weight = 1.0 / n_clients
+                    
+                    # Add to weighted sum
+                    for key in weighted_sum:
+                        weighted_sum[key] += weight * processed_state_dict[key]
                 
                 del client_model
-                torch.cuda.empty_cache()
+                if self.dataset_name == 'reddit':
+                    del client_loader
+                # torch.cuda.empty_cache()
             
-            local_models.extend(batch_updates)
-            del batch_updates
             torch.cuda.empty_cache()
         
-        # Aggregate updates
-        if local_models:
-            global_state_dict = self.method.aggregate_updates(global_state_dict, local_models)
-            self.model.load_state_dict(global_state_dict)
+        # Use method's aggregation logic for final update
+        dummy_local_models = [weighted_sum]
+        dummy_weights = [1.0]
+        global_state_dict = self.method.aggregate_updates(
+            global_state_dict, 
+            dummy_local_models,
+            dummy_weights
+        )
         
-        del local_models
-        torch.cuda.empty_cache()
+        self.model.load_state_dict(global_state_dict)
+        
         round_end_time = time.time()
         round_time = round_end_time - round_start_time
         print(f"Round {round_num + 1} completed in {round_time:.2f} seconds")
+        
         # Only evaluate periodically
         if round_num % self.eval_every == 0:
             return self.evaluate()
         return None
-    
 
     @torch.no_grad()
     def evaluate(self) -> Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]:
         self.model.eval()
         accuracies = []
         losses = []
-        loaders = [self.train_loaders[0], self.val_loader, self.test_loader]
         
-        for loader in loaders:
+        # Select appropriate training loader
+        if self.dataset_name == 'reddit':
+            train_loader = self.data_loader.get_client_dataloader(0)
+        else:
+            train_loader = self.train_loaders[0]
+            
+        loaders = [train_loader, self.val_loader, self.test_loader]
+        
+        for loader_idx, loader in enumerate(loaders):
             correct = total = 0
             running_loss = 0.0
             
             for batch in loader:
-                # Handle list format
-                data, target = batch[0], batch[1]  # Extract from list
+                if isinstance(batch, (tuple, list)):
+                    data, target = batch[0], batch[1]
+                else:
+                    data, target = batch
+                    
                 data, target = data.to(self.device), target.to(self.device)
                 
-                # Forward pass
-                output = self.model(data)
-                
-                # Compute loss
-                loss = self.criteria(output, target)
-                running_loss += loss.item() * data.size(0)  # Multiply by batch size
-                
-                # Compute accuracy
-                pred = output.argmax(dim=1)
-                correct += (pred == target).sum().item()
-                total += target.size(0)
-                
-            # Calculate average loss and accuracy
+                if self.dataset_name == 'reddit':
+                    # Reddit dataset specific handling
+                    padding_mask = (data == loader.dataset.pad_idx)
+                    output = self.model(data, src_padding_mask=padding_mask)
+                    output = output.view(-1, output.size(-1))
+                    target = target.view(-1)
+                    
+                    loss = self.criteria(output, target)
+                    running_loss += loss.item() * target.size(0)
+                    
+                    pred = output.argmax(dim=1)
+                    total += target.size(0)
+                    
+                    valid_mask = (target != loader.dataset.pad_idx) & (target != loader.dataset.unk_idx)
+                    correct += ((pred == target) & valid_mask).sum().item()
+                else:
+                    output = self.model(data)
+                    loss = self.criteria(output, target)
+                    running_loss += loss.item() * data.size(0)
+                    
+                    pred = output.argmax(dim=1)
+                    correct += (pred == target).sum().item()
+                    total += target.size(0)
+            
+            if loader_idx == 0 and self.dataset_name == 'reddit':
+                del train_loader
+                torch.cuda.empty_cache()
+            
             avg_loss = running_loss / total
             accuracy = 100. * correct / total
             
             accuracies.append(accuracy)
             losses.append(avg_loss)
         
-        # Return (accuracy, loss) tuple for each loader: (train, val, test)
         return (accuracies[0], losses[0]), (accuracies[1], losses[1]), (accuracies[2], losses[2])

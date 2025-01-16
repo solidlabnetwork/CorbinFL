@@ -1,299 +1,363 @@
-import time
-import argparse
+# main.py
 import os
-import pandas as pd
 import torch
-import torch.nn as nn
+import pandas as pd
+from datetime import datetime
+from typing import List, Tuple
+import json
+import pickle
 
-
-from Nets import ResNet18, CNNMNIST
 from main_dp_func import (
-    perturb_weight,
-    comm_rand,
-    one_dim_one_bit_cq,
-    compute_center_and_range,
-    federated_learning_pairing,
-    train_on_client,
-    client_assignment,
-    compute_sigma_agm,
-    load_checkpoint,
+    load_data,
     save_checkpoint,
-    load_data
+    load_checkpoint
 )
 from main_utils import (
     setup_device,
     set_seed,
-    validate,
 )
-###
+from Nets import ResNet18, CNNMNIST, CharLSTM, Sent140LSTM, RedditTransformer, CNNEMNIST
+from methods.corbin_fl import CorBinFL
+from methods.FedAvg import FedAvg
+from methods.signsgd import SignSGD
+from methods.ldp_fl import LDPFL
+from federated_trainer import FederatedTrainer
+from dataloaders.reddit import RedditDataLoader
+from dataloaders.femnist import FEMNISTDataLoader
+from dataloaders.femnist_IID import IIDFEMNISTDataLoader
+from dataloaders.shakespeare_IID import ShakespeareDataLoader
+from dataloaders.shakespeare import ShakespeareNonIIDDataLoader
+
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Hyperparameter tuning for your model")
-    parser.add_argument('--method', type=str, default="CorBinFL", 
-                        choices=["LDPFL", "CorBinFL", "CorQuant", "AugCorBinFL", "VanillaFL", "GaussianFL", "LaplaceFL"],
-                        help='Method for Federated Learning')
-    parser.add_argument('--dataset', type=str, default="CIFAR10", choices=["MNIST", "CIFAR10"],
+    import argparse
+    parser = argparse.ArgumentParser(description="Federated Learning with CorbinFL")
+    
+    # Required arguments
+    parser.add_argument('--dataset', type=str, required=True,
+                        choices=['MNIST', 'CIFAR10', 'Shakespeare', 'Sent140', 'Reddit', 'FEMNIST'],
                         help='Dataset to use')
-    parser.add_argument('--device', type=str, default="GPU", choices=["GPU", "CPU"],
-                        help='Device that is used for Federated Learning')
+    parser.add_argument('--method', type=str, required=True, 
+                        choices=['FedAvg', 'CorbinFL', 'SignSGD', 'LDPFL'],
+                        help='Federated learning method')
+    parser.add_argument('--iid', action='store_true',
+                        help='Whether to use IID data splitting (for Shakespeare)')
+    parser.add_argument('--device', type=str, required=True,
+                       choices=['CPU', 'GPU'],
+                       help='Device to use for training')
+    
+    # Optional arguments with defaults
     parser.add_argument('--num_clients', type=int, default=50,
-                        help='Number of Clients in Federated Learning')
+                       help='Number of clients')
     parser.add_argument('--num_rounds', type=int, default=300,
-                        help='Round of communication in Federated Learning')
-    parser.add_argument('--epsilon', type=float, default=10,
-                        help='Privacy budget for Differential Privacy')
-    parser.add_argument('--num_rand', type=int, default=5,
-                        help='Number of Randomness for CorBinFL')
-    parser.add_argument('--gamma', type=float, default=0,
-                        help='Gamma value for AugCorBinFL')
-    parser.add_argument('--dropout', type=float, default=0,
-                        help='dropout probability for CorBinDropout')
-    parser.add_argument('--lambda_param', type=float, default=1,
-                        help='Smoothing parameter for the global model update')
+                       help='Number of communication rounds')
+    parser.add_argument('--epsilon', type=float, default=None,
+                       help='Privacy budget')
+    parser.add_argument('--num_rand', type=int, default= None,
+                       help='Number of random bits for CorbinFL')
+    parser.add_argument('--lambda_param', type=float, default=1.0,
+                       help='Aggregation parameter')
+    parser.add_argument('--dropout', type=float, default=0.0,
+                       help='Client dropout probability')
     parser.add_argument('--batch_size', type=int, default=64,
-                        help='batch size for training')
+                       help='Batch size for training')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed')
+    parser.add_argument('--eval_every', type=int, default=1,
+                       help='Evaluate every N rounds')
+    # Add Adam-related arguments
+    parser.add_argument('--use_adam', action='store_true',
+                       help='Use Adam-style updates instead of lambda-based updates')
+    parser.add_argument('--beta1', type=float, default=0.9,
+                       help='Adam beta1 parameter (default: 0.9)')
+    parser.add_argument('--beta2', type=float, default=0.999,
+                       help='Adam beta2 parameter (default: 0.999)')
+    parser.add_argument('--lr', type=float, default=0.001,
+                       help='Adam learning rate (default: 0.001)')
+    parser.add_argument('--weight_decay', type=float, default=0.003,
+                       help='weight decay (default: 0.003)')
+    parser.add_argument('--adam_eps', type=float, default=1e-8,
+                       help='Adam epsilon parameter (default: 1e-8)')
+    
     return parser.parse_args()
 
+def setup_experiment_tracking(args) -> Tuple[str, str]:
+    """Setup directories and files for experiment tracking"""
+    # Create timestamp for unique experiment ID
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    exp_name = f"{args.method}_{args.dataset}_{timestamp}"
+    
+    # Setup directories
+    checkpoint_dir = os.path.join('checkpoints', exp_name)
+    results_dir = os.path.join('results', exp_name)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+    
+    # Create paths
+    checkpoint_path = os.path.join(checkpoint_dir, 'model.pth')
+    results_path = os.path.join(results_dir, 'metrics.csv')
+    
+    # Save experiment config
+    config_path = os.path.join(results_dir, 'config.txt')
+    with open(config_path, 'w') as f:
+        for arg, value in vars(args).items():
+            f.write(f'{arg}: {value}\n')
+            
+    return checkpoint_path, results_path
 
+def save_results(results: List[List[float]], results_path: str):
+    """Save training results to CSV"""
+    columns = [
+        'Round', 
+        'Train Accuracy', 'Train Loss',
+        'Val Accuracy', 'Val Loss',
+        'Test Accuracy', 'Test Loss'
+    ]
+    df = pd.DataFrame(results, columns=columns)
+    df.to_csv(results_path, index=False)
 
+def get_model_creator(dataset_name: str):
+
+    if dataset_name == "CIFAR10":
+        lr = 0.001
+        weight_decay = 0.003
+    elif dataset_name == "MNIST":
+        lr = 0.001
+        weight_decay = 0.003
+    elif dataset_name.lower() in ["shakespeare", "sent140"]:
+        lr = 0.001
+        weight_decay = 0
+    elif dataset_name.lower() == "reddit":
+        lr = 0.001
+        weight_decay = 0
+    elif dataset_name.lower() == "femnist":
+        lr = 0.0003
+        weight_decay = 0
+
+    def create_model(device):
+        if dataset_name.lower() == "cifar10":
+            model = ResNet18().to(device)
+        elif dataset_name.lower() == "mnist":
+            model = CNNMNIST().to(device)
+        elif dataset_name.lower() == "femnist":
+            model = CNNEMNIST().to(device)
+        elif dataset_name.lower() == "shakespeare":
+            model = CharLSTM().to(device)
+        elif dataset_name.lower() == "sent140":
+            vocab_file = 'data/Sent140/embs.json'
+            with open(vocab_file, 'r') as f:
+                data = json.load(f)
+                vocab = data['vocab']  # List of words in the vocabulary
+                vocab_size = len(vocab)
+
+            # print(f"Vocab size: {vocab_size}")
+            model = Sent140LSTM(vocab_size).to(device)
+        elif dataset_name.lower() == "reddit":
+            vocab_path = 'data/Reddit/reddit_vocab.pck'
+            with open(vocab_path, 'rb') as f:
+                vocab = pickle.load(f)
+                vocab_size = len(vocab['vocab'])
+            model = RedditTransformer(vocab_size, emsize=400, nhead=8, nhid=400, 
+                 nlayers=4, dropout=0.2, max_seq_length=10).to(device)
+            print(f"Vocab size for model: {vocab_size}")
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
+        return model
+    return create_model, lr, weight_decay
 
 def main():
+    # Parse arguments and setup
     args = parse_arguments()
     device = setup_device(args.device)
-    set_seed(42)
-
-    # Setup hyperparameters
-    n_clients = args.num_clients
-    num_rounds = args.num_rounds
-    epsilon = torch.tensor(args.epsilon, device=device)
-    batch_size = args.batch_size
-    alpha = (torch.exp(epsilon) + 1) / (torch.exp(epsilon) - 1)
-
-     # raise error if dropout is greater than 1 or less than 0
-    if args.dropout > 1 or args.dropout < 0:
-        raise ValueError("Dropout probability should be between 0 and 1")
-    dropout = torch.tensor(args.dropout, dtype=torch.float32, device=device)
-
-    if args.method not in ["AugCorBinFL"]: # we didnt implement dropout for AugCorBinFL
-        method = args.method + "Dropout" if dropout > 0 else args.method
-    else:
-        method = args.method
-    lambda_param = args.lambda_param
-    NumRand = args.num_rand if "CorBin" in method else 0
-    Gamma = args.gamma if "AugCorBinFL" in method else 0
-
-    delta = 1e-5 # delta for differential privacy of Gaussian method
-    n_local_epochs = 1
-    learning_rate = 0.001
-    weight_decay = 0.003
-    counter_reset = 5
-
-    print('Method:', method)
-
-    # Load data
-    print(args.dataset)
-    data_dir = f'./data/{args.dataset}'
-    os.makedirs(data_dir, exist_ok=True)
-    client_dataloaders, val_loader, test_dataloader, _ = load_data(args.dataset, data_dir, n_clients, batch_size)
-    global_model = ResNet18().to(device) if args.dataset == "CIFAR10" else CNNMNIST().to(device)
-
+    set_seed(args.seed)
     
-    # Setup model and criteria
-    criteria = nn.CrossEntropyLoss()
+    # Setup experiment tracking
+    checkpoint_path, results_path = setup_experiment_tracking(args)
     
-    # Setup checkpoint
-        # Generate the Name for checkpoint and results
-    if method == "CorBinFL":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_num_clients_{n_clients}_epc{num_rounds}'   
-    elif method == "AugCorBinFL":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_Gamma_{args.gamma}_num_clients_{n_clients}_epc{num_rounds}'
-    elif method == "CorBinFLDropout":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_NR_{args.num_rand}_lmbda_{lambda_param}_dropout_{args.dropout}_num_clients_{n_clients}_epc{num_rounds}'
-    elif method == "CorQuant":
-        Name = f'{method}_{args.dataset}_lmbda_{lambda_param}_num_clients_{n_clients}_epc{num_rounds}'
-    elif method == "CorQuantDropout":
-        Name = f'{method}_{args.dataset}_lmbda_{lambda_param}_dropout_{args.dropout}_num_clients_{n_clients}_epc{num_rounds}'
-    elif method == "VanillaFL":
-        Name = f'{method}_{args.dataset}_num_clients_{n_clients}_epc{num_rounds}'
-    elif method == "LDPFLDropout":
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_lmbda_{lambda_param}_dropout_{args.dropout}_num_clients_{n_clients}_epc{num_rounds}'
+    print("=== Experiment Configuration ===")
+    print(f"Dataset: {args.dataset}")
+    print(f"Number of clients: {args.num_clients}")
+    print(f"Number of rounds: {args.num_rounds}")
+    print(f"Privacy budget (ε): {args.epsilon}")
+    print(f"Device: {args.device}")
+    print(f"Checkpoint path: {checkpoint_path}")
+    print("==============================\n")
+    
+    # data loading
+    # For Reddit dataset
+    if args.dataset.lower() == 'reddit':
+        data_loader = RedditDataLoader(
+            data_dir='./data/Reddit',
+            n_clients=args.num_clients,
+            batch_size=args.batch_size,
+            seq_length=10,
+            iid=args.iid
+        )
+        _, val_loader, test_loader, _ = data_loader.load_data()
+        train_loaders = None  # Not needed for Reddit
+    elif args.dataset.lower() == 'femnist':
+        # Store data_loader for FEMNIST to get new clients each round
+        if args.iid:
+            data_loader = IIDFEMNISTDataLoader(
+                data_dir=f'./data/{args.dataset}',
+                n_clients=args.num_clients,
+                batch_size=args.batch_size
+            )
+            train_loaders, val_loader, test_loader, client_weights, _ = data_loader.load_data()
+            data_loader = None
+
+        else:
+            data_loader = FEMNISTDataLoader(
+                data_dir=f'./data/{args.dataset}',
+                n_clients=args.num_clients,
+                batch_size=args.batch_size
+            )
+            train_loaders, val_loader, test_loader, client_weights, _ = data_loader.load_data()
+    # if it is shakespeare and nonIID
+    elif args.dataset.lower() == 'shakespeare' and not args.iid:
+        data_loader = ShakespeareNonIIDDataLoader(
+            data_dir='./data/Shakespeare',
+            n_clients=args.num_clients,
+            batch_size=args.batch_size
+        )
+        train_loaders, val_loader, test_loader, _, _ = data_loader.load_data()
     else:
-        Name = f'{method}_{args.dataset}_eps_{args.epsilon}_lmbda_{lambda_param}_num_clients_{n_clients}_epc{num_rounds}'
-
-    print("*" * 50)
-    print("Dataset:", args.dataset)
-    print("Method:", Name)
-    print("*" * 50)
-    checkpoint_dir = 'checkpoint'
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_{Name}.pth')
-
-    start_round, accuracy_list, train_accuracy_list, results, counter, best_accuracy = load_checkpoint(checkpoint_path, global_model)
-
-    print(f"Starting from round {start_round + 1}")
-    start_time = time.time()
- 
-    for round in range(start_round, num_rounds):
-        round_start_time = time.time()
-
+        # Original data loading for other datasets
+        train_loaders, val_loader, test_loader, _ = load_data(
+            args.dataset, 
+            f'./data/{args.dataset}', 
+            args.num_clients, 
+            args.batch_size
+        )
+        data_loader = None  # Not needed for other datasets
+    
+    # Initialize model
+    print("Initializing model...")
+    # model = ResNet18().to(device) if args.dataset == "CIFAR10" else CNNMNIST().to(device)
+    model_creator, lr, weight_decay = get_model_creator(args.dataset)
+    # print(f"GPU memory after model init: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+    
+    # Initialize method
+    if args.method == "FedAvg":
+        method = FedAvg(
+            device=device
+        )
+    elif args.method == "CorbinFL":
+        method = CorBinFL(
+            epsilon=args.epsilon,
+            num_rand=args.num_rand,
+            lambda_param=args.lambda_param,
+            dropout=args.dropout,
+            use_adam=args.use_adam,
+            beta1=args.beta1 if args.use_adam else None,
+            beta2=args.beta2 if args.use_adam else None,
+            lr=args.lr if args.use_adam else None,
+            eps=args.adam_eps if args.use_adam else None,
+            device=device
+        )
+    elif args.method == "SignSGD":
+        method = SignSGD(
+            lr=0.0003,  # 0.0001 from paper's recommended default
+            beta=0.9,   # β=0.9 from paper's recommended default
+            weight_decay=0,  # λ from algorithm
+            dropout=args.dropout,
+            device=device
+        )
+    elif args.method == "LDPFL":
+        method = LDPFL(
+            epsilon=args.epsilon,
+            num_rand=args.num_rand,
+            lambda_param=args.lambda_param,
+            dropout=args.dropout,
+            use_adam=args.use_adam,
+            beta1=args.beta1 if args.use_adam else None,
+            beta2=args.beta2 if args.use_adam else None,
+            lr=args.lr if args.use_adam else None,
+            eps=args.adam_eps if args.use_adam else None,
+            device=device
+        )
+    
+    # Initialize trainer
+    trainer = FederatedTrainer(
+        method=method,
+        model=model_creator(device),
+        model_creator=model_creator,
+        train_loaders=train_loaders,  # Will be None for Reddit
+        val_loader=val_loader,
+        test_loader=test_loader,
+        device=device,
+        num_rounds=args.num_rounds,
+        checkpoint_path=checkpoint_path,
+        dataset_name=args.dataset,
+        eval_every=args.eval_every,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        data_loader=data_loader  # Will be None for non-Reddit datasets
+    )
+    
+    # Training loop
+    print("\nStarting training...")
+    best_val_acc = 0
+    counter = 0
+    results = []
+    
+    for round in range(args.num_rounds):
+        # Train round and get accuracies
+        accuracies = trainer.train_round(round)
         
-        # Compute center and range for each layer
-        C, R = compute_center_and_range(global_model, device)
-        global_state_dict = global_model.state_dict()
-        c_r_keys = [k for k in global_state_dict.keys() if "weight" in k or "bias" in k]
-        c_r_mapping = {k: i for i, k in enumerate(c_r_keys)}
-        if method in ["CorBinFL", "AugCorBinFL", "CorBinFLDropout"]:
-            client_pairing = federated_learning_pairing(n_clients)
-        else:
-            client_pairing = [i for i in range(n_clients)]
-        client_assignment_r = client_assignment(n_clients, method, gamma=Gamma, dropout=dropout, device=device)
-        # print client pairing
-        # print(f"Round {round + 1}, Client Pxairing: {client_pairing}")
-        if "CorQuant" in method:
-            pi_dict = {}
-            for k in c_r_keys:
-                shape = global_state_dict[k].shape
-                pi_dict[k] = torch.stack([torch.randperm(n_clients, device=device) for _ in range(torch.prod(torch.tensor(shape)))]).reshape(*shape, n_clients)
-
-        # Local training
-        local_models = []
-        for i in range(n_clients):
+        if accuracies is not None:  # Only when evaluation is performed
+            (train_acc, train_loss), (val_acc, val_loss), (test_acc, test_loss) = accuracies
+            results.append([
+                round + 1,
+                train_acc, train_loss,
+                val_acc, val_loss,
+                test_acc, test_loss
+            ])
             
-            client_model = ResNet18().to(device) if args.dataset == "CIFAR10" else CNNMNIST().to(device)
-            client_model.load_state_dict(global_state_dict)
-            client_model = train_on_client(client_model, client_dataloaders[client_pairing[i]], epochs=n_local_epochs, lr=learning_rate, weight_decay=weight_decay, device=device)
-            client_state_dict = client_model.state_dict()
-
-            if method in ["CorBinFL", "AugCorBinFL"]:
-                if client_assignment_r[i] == 1:  # if the client is leader
-                    total_params = sum(client_state_dict[key].numel() for key in c_r_keys)
-                    CR = comm_rand(args.num_rand, total_params, device=device)
-                    UP = 1
-                elif client_assignment_r[i] == 0:  # if the client is follower
-                    UP = -1
-            elif method == "CorBinFLDropout":
-                if client_assignment_r[i] == 1:  # if the client is leader
-                    total_params = sum(client_state_dict[key].numel() for key in c_r_keys)
-                    CR = comm_rand(args.num_rand, total_params, device=device)
-                    UP = 1
-                elif client_assignment_r[i] == 0:  # if the client is follower
-                    UP = -1
-                    if client_assignment_r[i-1] == 2:  # if the client is follower and the leader dropout create a new CR
-                        total_params = sum(client_state_dict[key].numel() for key in c_r_keys)
-                        CR = comm_rand(args.num_rand, total_params, device=device)
-
-            start_idx = 0
-            for key in c_r_keys:
-                param_ = client_state_dict[key]
-                param_data_ = param_.data
-                num_elements = param_data_.numel()
-                c = C[c_r_mapping[key]].item()
-                r = R[c_r_mapping[key]].item()
-
-
-
-                if method in ["LDPFL", "LDPFLDropout"]:
-                    if client_assignment_r[i] < 2:
-                        client_state_dict[key] = perturb_weight(param_data_, alpha, c, r, LDPFL=True, device=device)
-                elif method in ["CorBinFL", "CorBinFLDropout"]:
-                    if client_assignment_r[i] < 2: # if the client is not in dropout (For CorBinFL client_assignment_r[i] is always <2)
-                        CR_layer = CR[start_idx:start_idx + num_elements]
-                        client_state_dict[key]= perturb_weight(param_data_, alpha, c, r, CR_layer, NumRand, UP, LDPFL=False, device=device)
-                elif method == "AugCorBinFL": # We didn't implement dropout for AugCorBinFL
-                    if client_assignment_r[i] == 2: # if the client is assigned to be LDPFL
-                        client_state_dict[key] = perturb_weight(param_data_, alpha, c, r, LDPFL=True, device=device)
-                    else:
-                        CR_layer = CR[start_idx:start_idx + num_elements]
-                        client_state_dict[key]= perturb_weight(param_data_, alpha, c, r, CR_layer, NumRand, UP, LDPFL=False, device=device)
-                elif method in ["CorQuant", "CorQuantDropout"]:
-                    if client_assignment_r[i] < 2: # if the client is not in dropout
-                        pi = pi_dict[key][..., i].to(device)
-                        client_state_dict[key] = one_dim_one_bit_cq(param_data_,  pi, c, r, n_clients, device=device)
-                elif method in ["GaussianFL", "GaussianFLDropout"]:
-                    if client_assignment_r[i] < 2:
-                        sensitivity = 2 * r
-                        sigma = compute_sigma_agm(epsilon, delta, sensitivity)
-                        noise = torch.normal(0, sigma, size=param_data_.shape, device=device)
-                        # noise = torch.distributions.Normal(loc=0, scale=sigma).sample(param_data_.shape).to(device)
-                        client_state_dict[key].add_(noise)
-                elif method in ["LaplaceFL", "LaplaceFLDropout"]:
-                    if client_assignment_r[i] < 2:
-                        sensitivity = 2 * r
-                        scale = sensitivity / epsilon
-
-                        noise = torch.distributions.Laplace(loc=0, scale=scale+1e-6).sample(param_data_.shape).to(device) # 1e-6 is added to avoid zero probability
-                        client_state_dict[key].add_(noise)
-                elif method != "VanillaFL":
-                    raise ValueError(f"Unsupported method: {method}")
-
-
-                start_idx += num_elements
-
-            if "Dropout" in method:
-                if client_assignment_r[i] < 2:  # do not consider the dropout clients
-                    local_models.append(client_state_dict)
-            else:
-                local_models.append(client_state_dict)
-
-        # Update global model
-        for key in global_state_dict.keys():
-            if global_state_dict[key].dtype == torch.long:
-                mean_weights = torch.stack([local_model[key] for local_model in local_models], 0).float().mean(0).long()
-            else:
-                mean_weights = torch.stack([local_model[key] for local_model in local_models], 0).mean(0)
+            print(f'\nRound {round + 1}:')
+            print(f'Train Accuracy: {train_acc:.2f}%')
+            print(f'Val Accuracy: {val_acc:.2f}%')
+            print(f'Test Accuracy: {test_acc:.2f}%')
+            print(f'GPU Memory: {torch.cuda.memory_allocated() / 1024**2:.2f} MB')
             
-            global_state_dict[key] = (1 - lambda_param) * global_state_dict[key] + lambda_param * mean_weights
-
-        global_model.load_state_dict(global_state_dict)
-
-        # Evaluation
-        global_model.eval()
-        _, test_accuracy = validate(global_model, test_dataloader, criteria, device=device)
-        _, val_accuracy = validate(global_model, val_loader, criteria, device=device)
-        _, train_accuracy = validate(global_model, client_dataloaders[0], criteria, device=device)
-
-        accuracy_list.append(test_accuracy)
-        print(f'Round {round + 1}, Test Accuracy: {test_accuracy:.2f}%')
-        print(f'Round {round + 1}, Train Accuracy: {train_accuracy:.2f}%')
-        results.append([round + 1, train_accuracy, test_accuracy])
-
-        # Save best model
-        if val_accuracy > best_accuracy:
-            counter = 0
-            best_accuracy = val_accuracy
-            print(f"Saving the best model with test accuracy: {test_accuracy:.2f}%")
-            save_checkpoint(checkpoint_path, round, global_model, accuracy_list, train_accuracy_list, results, counter, best_accuracy)
-        else:
-            counter += 1
-            print("Counter:", counter)
-
-        if counter >= counter_reset:
-            counter = 0
-            print("Reloading the best model and continuing training.")
-            if os.path.exists(checkpoint_path):
-                print("Loading the best model from the checkpoint.")
-                checkpoint = torch.load(checkpoint_path)
-                global_model.load_state_dict(checkpoint['model_state_dict'])
+            # Save checkpoint if improved
+            if val_acc > best_val_acc:
+                counter = 0
+                best_val_acc = val_acc
+                save_checkpoint(
+                    checkpoint_path,
+                    round,
+                    trainer.model,
+                    [test_acc],
+                    [train_acc],
+                    results,
+                    counter,
+                    best_val_acc
+                )
+                print(f"New best model saved! (Val Acc: {val_acc:.2f}%)")
             else:
-                print("No checkpoint found. Exiting the training loop.")
-                break
-        print("Best validation accuracy so far:", best_accuracy)
+                counter += 1
+            
+            # Early stopping check
+            if counter >= 5:
+                counter = 0
+                print("Loading best model due to no improvement")
+                torch.cuda.empty_cache()
+                _, _, _, _, _, _ = load_checkpoint(checkpoint_path, trainer.model)
+            
+            # Save current results
+            save_results(results, results_path)
+        
+        # Memory stats every 10 rounds
+        if round % 10 == 0:
+            print(f"\nMax GPU memory used: {torch.cuda.max_memory_allocated() / 1024**2:.2f} MB")
+            torch.cuda.reset_peak_memory_stats()
 
-        round_end_time = time.time()
-        print(f"Round Time: {round_end_time - round_start_time:.2f} seconds")
-
-    end_time = time.time()
-    print(f"Total Training Time: {end_time - start_time:.2f} seconds")
-    
-    # Save results as csv
-    results_df = pd.DataFrame(results, columns=["Round", "Train Accuracy", "Test Accuracy"])
-    results_df["Total Training Time"] = end_time - start_time
-
-    output_dir = 'result'
-    os.makedirs(output_dir, exist_ok=True)
-    filename = f"{Name}.csv"
-    csv_path = os.path.join(output_dir, filename)
-    results_df.to_csv(csv_path, index=False)
-
+    print("\nTraining completed!")
+    print(f"Best validation accuracy: {best_val_acc:.2f}%")
+    print(f"Results saved to: {results_path}")
 
 if __name__ == "__main__":
     main()
+
+
+
