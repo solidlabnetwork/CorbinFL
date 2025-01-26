@@ -59,12 +59,14 @@ class FederatedTrainer:
         
         # Compute center and range for each layer
         C, R = compute_center_and_range(self.model, self.device)
+
+
         global_state_dict = self.model.state_dict()
         
         # Initialize weighted sum dictionary with zeros
         weighted_sum = {}
         for key in global_state_dict:
-            weighted_sum[key] = torch.zeros_like(global_state_dict[key], device=self.device)
+            weighted_sum[key] = torch.zeros_like(global_state_dict[key],dtype=torch.float32, device=self.device)
         
         # For FEMNIST and shakespeare nonIID, get new clients each round
         if self.dataset_name.lower() in ['femnist', 'shakespeare'] and self.data_loader is not None:
@@ -90,7 +92,8 @@ class FederatedTrainer:
         
         # Local training - process clients in batches
         client_batch_size = 50
-        
+        # print("Length of train loader is", len(self.train_loaders))
+        # print("client ordering is", client_ordering)
         for client_batch_start in range(0, n_clients, client_batch_size):
             client_batch_end = min(client_batch_start + client_batch_size, n_clients)
             
@@ -144,7 +147,7 @@ class FederatedTrainer:
                     
                     # Add to weighted sum
                     for key in weighted_sum:
-                        weighted_sum[key] += weight * processed_state_dict[key]
+                        weighted_sum[key] += weight * processed_state_dict[key].float()
                 
                 del client_model
                 if self.dataset_name == 'reddit':

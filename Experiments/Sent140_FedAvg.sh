@@ -36,7 +36,6 @@ for seed_val in "${seeds[@]}"; do
     echo "Running experiments with seed: $seed_val"
 
     # Experiment commands with retry logic
-    run_with_retry "python main.py --dataset FEMNIST --iid --method FedAvg --device GPU --num_clients 50 --num_rounds 100 --seed $seed_val --lr 0.0003"
-    run_with_retry "python main.py --dataset FEMNIST --method FedAvg --device GPU --num_clients 350 --num_rounds 500 --seed $seed_val --lr 0.0003"
+    run_with_retry "python main.py --dataset Sent140 --iid --method FedAvg --device GPU --num_clients 50 --num_rounds 100 --seed $seed_val --lr 0.001"
 
 done

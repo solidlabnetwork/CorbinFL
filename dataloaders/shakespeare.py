@@ -4,7 +4,9 @@ import numpy as np
 from collections import defaultdict
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch
-
+# Link for data
+# https://github.com/wenzhu23333/Federated-Learning/tree/master/data/shakespeare
+# this is sampled from leaf project with 20% of the clients in noniid
 from .base import BaseDataLoader, DatasetSubset
 
 class ShakespeareDataset(Dataset):
@@ -186,7 +188,7 @@ class ShakespeareNonIIDDataLoader(BaseDataLoader):
 
     def load_data(self):
         """Load data for randomly selected clients"""
-        # Randomly select n_clients
+        # Randomly select n_clients from available clients
         selected_clients = np.random.choice(
             self.train_clients,
             size=min(self.n_clients, len(self.train_clients)),
@@ -227,4 +229,4 @@ class ShakespeareNonIIDDataLoader(BaseDataLoader):
                 weight = len(self.train_data[client]['y']) / total_samples
                 client_weights.append(weight)
         
-        return train_loaders, self.val_loader, self.test_loader, client_weights, None
+        return train_loaders, self.val_loader, self.test_loader, client_weights, selected_clients

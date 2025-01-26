@@ -1,13 +1,15 @@
 # corbin_fl.py
 import torch
 from .base import FederatedMethod
+import os
+import numpy as np
 from main_dp_func import federated_learning_pairing
 
 
 class CorBinFL(FederatedMethod):
     def __init__(self, epsilon, num_rand, lambda_param=1, dropout=0,
                  use_adam=False, beta1=0.9, beta2=0.999, lr=0.001, eps=1e-8,
-                 device='cuda'):
+                 device='cuda', save_weights=False, save_dir='saved_weights'):
         super().__init__(
             epsilon=epsilon,
             num_rand=num_rand,
@@ -21,6 +23,7 @@ class CorBinFL(FederatedMethod):
             device=device
         )
         self.alpha = (torch.exp(torch.tensor(epsilon)) + 1) / (torch.exp(torch.tensor(epsilon)) - 1)
+        self.is_saved = False
         
     def initialize_round(self, n_clients, global_model):
         """Initialize variables for the round, including client pairing and CR generation"""
@@ -77,6 +80,25 @@ class CorBinFL(FederatedMethod):
         indices = torch.clamp(indices, 0, two_pow_d - 1)
         return indices.to(P_batch.device)
 
+    def save_layer_probabilities(self, probabilities, client_idx, layer_name, round_num):
+        """
+        Save probabilities for a specific layer to a file.
+        
+        Args:
+            probabilities (torch.Tensor): Probability tensor to save
+            client_idx (int): Client identifier
+            layer_name (str): Name of the layer
+            round_num (int): Current communication round
+        """
+        # Convert to numpy for easier saving
+        probs_np = probabilities.cpu().numpy()
+        
+        # Create filename with round and client info
+        filename = f"round_{round_num}_client_{client_idx}_{layer_name}_probs.npy"
+        filepath = os.path.join(self.save_dir, filename)
+        
+        # Save the numpy array
+        np.save(filepath, probs_np)
     def _perturb_weight(self, W, c, r, CR, UP):
         """
         CorBinFL-specific weight perturbation function.
@@ -96,7 +118,13 @@ class CorBinFL(FederatedMethod):
         
         # Calculate ProbMarginal
         ProbMarginal = 0.5 + (torch.clamp(W, c - r, c + r) - c) / (2 * self.alpha * r)
-        
+        # self.save_layer_probabilities(
+        #                 ProbMarginal,
+        #                 client_idx,
+        #                 key,
+        #                 self.current_round
+        #             )
+
         # Calculate P based on UP
         P = ProbMarginal if UP == 1 else 1 - ProbMarginal
         

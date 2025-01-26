@@ -21,12 +21,15 @@ from methods.corbin_fl import CorBinFL
 from methods.FedAvg import FedAvg
 from methods.signsgd import SignSGD
 from methods.ldp_fl import LDPFL
+from methods.Gaussian_LDP import GaussianLDP
+from methods.Laplace_LDP import LaplaceLDP
 from federated_trainer import FederatedTrainer
 from dataloaders.reddit import RedditDataLoader
 from dataloaders.femnist import FEMNISTDataLoader
 from dataloaders.femnist_IID import IIDFEMNISTDataLoader
 from dataloaders.shakespeare_IID import ShakespeareDataLoader
 from dataloaders.shakespeare import ShakespeareNonIIDDataLoader
+
 
 def parse_arguments():
     import argparse
@@ -37,7 +40,7 @@ def parse_arguments():
                         choices=['MNIST', 'CIFAR10', 'Shakespeare', 'Sent140', 'Reddit', 'FEMNIST'],
                         help='Dataset to use')
     parser.add_argument('--method', type=str, required=True, 
-                        choices=['FedAvg', 'CorbinFL', 'SignSGD', 'LDPFL'],
+                        choices=['FedAvg', 'CorbinFL', 'SignSGD', 'LDPFL', 'GaussianLDP', 'LaplaceLDP'],
                         help='Federated learning method')
     parser.add_argument('--iid', action='store_true',
                         help='Whether to use IID data splitting (for Shakespeare)')
@@ -73,8 +76,8 @@ def parse_arguments():
                        help='Adam beta2 parameter (default: 0.999)')
     parser.add_argument('--lr', type=float, default=0.001,
                        help='Adam learning rate (default: 0.001)')
-    parser.add_argument('--weight_decay', type=float, default=0.003,
-                       help='weight decay (default: 0.003)')
+    parser.add_argument('--weight_decay', type=float, default=0,
+                       help='weight decay (default: 0)')
     parser.add_argument('--adam_eps', type=float, default=1e-8,
                        help='Adam epsilon parameter (default: 1e-8)')
     
@@ -94,7 +97,10 @@ def setup_experiment_tracking(args) -> Tuple[str, str]:
     
     # Create paths
     checkpoint_path = os.path.join(checkpoint_dir, 'model.pth')
-    results_path = os.path.join(results_dir, 'metrics.csv')
+    iid_ind = 'IID' if args.iid else 'non-IID'
+    epsil_ind = f'ep_{args.epsilon}_' if args.epsilon is not None else ''
+    NR_ind = f'NR_{args.num_rand}_' if args.num_rand is not None else ''
+    results_path = os.path.join(results_dir, f'{args.method}_{args.dataset}_{iid_ind}_N_{args.num_clients}_T_{args.num_rounds}_{epsil_ind}{NR_ind}lmbda_{args.lambda_param}_seed_{args.seed}_lr_{args.lr}.csv')
     
     # Save experiment config
     config_path = os.path.join(results_dir, 'config.txt')
@@ -241,6 +247,10 @@ def main():
         method = FedAvg(
             device=device
         )
+    elif args.method == "GaussianLDP":
+        method = GaussianLDP(epsilon=args.epsilon, device=device)
+    elif args.method == "LaplaceLDP":
+        method = LaplaceLDP(epsilon=args.epsilon, device=device)
     elif args.method == "CorbinFL":
         method = CorBinFL(
             epsilon=args.epsilon,
