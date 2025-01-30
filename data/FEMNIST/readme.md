@@ -8,10 +8,10 @@ This document outlines the structure and format of the FEMNIST dataset as proces
 
 ```bash
 # Run with default settings (uses current directory)
-python femnist_preprocessor.py
+python get_data.py
 
 # Or specify custom directory
-python femnist_preprocessor.py --data_dir /path/to/your/directory
+python get_data.py --data_dir /path/to/your/directory
 ```
 
 ## Directory Structure

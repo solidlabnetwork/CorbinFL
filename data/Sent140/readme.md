@@ -28,7 +28,7 @@ This script processes the Sentiment140 dataset and GloVe embeddings to create a 
 
 Simply run:
 ```bash
-python process_embeddings.py
+python Download_data_Glove.py
 ```
 
 The script will:
