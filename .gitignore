@@ -19,3 +19,5 @@ result/
 results/
 __pycache__/
 testenv/
+old_main.py
+Plot_Comparison.ipynb
