@@ -1,17 +1,17 @@
 # Federated Learning with Differential Privacy
 
-This project implements CorBin-FL and Augmented CorBin-FL methods and compare them with other differentially private quantization method (LDP-FL Sun et. al. 2020) and non-private quantization method (CorQunt Sures et.al. 2022) and vanilla FL method. Also implement Improve Gaussian mechanism and Laplace mechanism for comparison. Implementation of federated learning is on CIFAR10 and MNIST datasets.
+This project implements CorBin-FL and Augmented CorBin-FL methods and compare them with other differentially private quantization method (LDP-FL Sun et. al. 2020) and non-private quantization method (CorQunt Sures et.al. 2022) and vanilla FL (FedAvg) method. Also implement Improve Gaussian mechanism and Laplace mechanism for comparison. Implementation of federated learning is on CIFAR10 and MNIST datasets.
 
 ## Features
 
 - Supports FL methods:
   - LDPFL (Local Differential Privacy Federated Learning "Sun, Qian, and Chen 2020")
-  - CorBinFL (Correlated Binary Federated Learning "Ours")
+  - CorbinFL (Correlated Binary Federated Learning "Ours", and with dropout)
   - CorQuant (Correlated Quantization "Suresh et al. 2022")
   - AugCorBinFL (Augmented Correlated Binary Federated Learning "Ours")
-  - VanillaFL (Standard Federated Learning "FedAvg" "McMahan et al. 2016")
-  - GaussianFL (Gaussian Noise Federated Learning "Balle and Wang 2018")
-  - LaplaceFL (Laplace Noise Federated Learning "Dwork 2006")
+  - FedAvg (Standard Federated Learning "FedAvg" "McMahan et al. 2016")
+  - GaussianLDP (Gaussian Noise Federated Learning "Balle and Wang 2018")
+  - LaplaceLDP (Laplace Noise Federated Learning "Dwork 2006")
 - Dropout variants for most methods
 - Supports MNIST and CIFAR10 datasets
 - Implements ResNet18 and CNN architectures
@@ -45,7 +45,8 @@ Run the main script with desired arguments:
 ```
 python main.py --method {MethodName} --dataset {DatasetName} --num_clients {int} --num_rounds {int} --epsilon {>0} --num_rand {int}
 ```
-MethodName in {"LDPFL", "CorBinFL", "CorQuant", "AugCorBinFL", "VanillaFL", "GaussianFL", "LaplaceFL" }
+MethodName in {'FedAvg', 'CorbinFL', 'AugCorbinFL', 'SignSGD', 'LDPFL', 'GaussianLDP', 'LaplaceLDP', 'GaussianCDP', 'CorQuant' }
+
 DatasetName in {CIFAR10, MNIST}
 
 ### Command-line Arguments
@@ -57,16 +58,10 @@ DatasetName in {CIFAR10, MNIST}
 - `--num_rounds`: Number of communication rounds (default: 300)
 - `--epsilon`: Privacy budget for Differential Privacy (default: 10)
 - `--num_rand`: Number of random bits for CorBinFL (default: 5)
-- `--gamma`: Gamma value for AugCorBinFL (default: 0)
+- `--Gamma`: Gamma value for AugCorBinFL (default: 0)
 - `--dropout`: Dropout probability (default: 0)
 - `--lambda_param`: Smoothing parameter for global model update (default: 1)
 
-## Project Structure
-
-- `main.py`: Main script to run the FL experiments
-- `Nets.py`: Contains neural network architectures (ResNet18, CNNMNIST)
-- `main_dp_func.py`: Implements DP-related functions
-- `main_utils.py`: Utility functions for data loading, GPU selection, etc.
 
 ## Results
 
@@ -80,21 +75,27 @@ Checkpoints will be saved in the `checkpoint` directory, allowing for resumption
 
 To implement dropout in CorBin-FL, set the parameter dropout>0 for instance:
 ```
-python main.py --method CorBinFL --epsilon 10 --dropout 0.3 
+python main.py --method CorbinFL --epsilon 10 --dropout 0.3 --device GPU
 ```
 
 To implement the Augmented CorBin-FL, the parameter gamma needs to be set, for instance:
 ```
-python main.py --method AugCorBinFL --epsilon 10 --gamma 0.2
+python main.py --method AugCorBinFL --epsilon 10 --gamma 0.2 --device GPU
 ```
 
 To implement on MNIST dataset:
 ```
-python main.py --method CorBinFL --dataset MNIST --epsilon 10 --lambda_param 0.5
-python main.py --method CorBinFL --dataset MNIST --epsilon 10 --lambda_param 0.5
+python main.py --method CorbinFL --dataset MNIST --epsilon 10 --lambda_param 0.5 --device GPU
+python main.py --method CorbinFL --dataset MNIST --epsilon 10 --lambda_param 0.5 --device GPU
 ```
 
 To implement dropout:
 ```
 python main.py --method LDPFL --epsilon 5 --dropout 0.1 --lambda_param 0.4
+```
+
+To run comprehensive experiments with different epsilon and lambda parameters:
+```
+cd Experiments
+bash epsilon_lambda_experiment.sh
 ```

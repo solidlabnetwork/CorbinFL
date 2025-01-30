@@ -1,10 +1,12 @@
-
 #!/bin/bash
 # Move to the parent directory
 cd ..
-# Define seeds as an array
-# seeds = [0, 42, 100, 1234, 5678, 9876, 13579, 24680, 31415, 99999]
+
+# Define parameters
 seeds=(0 42 100 1234 5678)
+epsilons=(1 3 5 7)
+# Generate lambda parameters from 0.1 to 1.0 with step 0.1
+lambda_params=($(seq 0.1 0.1 1.0))
 
 # Retry function
 run_with_retry() {
@@ -31,21 +33,14 @@ run_with_retry() {
     return 1                 # Return failure if all retries fail
 }
 
-# Loop through each seed value
+# Loop through all combinations of parameters
 for seed_val in "${seeds[@]}"; do
     echo "Running experiments with seed: $seed_val"
-
-    # Experiment commands with retry logic
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 1 --lambda_param 0.1 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 1 --lambda_param 0.2 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 1 --lambda_param 0.3 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 3 --lambda_param 0.2 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 3 --lambda_param 0.3 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 3 --lambda_param 0.4 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 5 --lambda_param 0.7 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 5 --lambda_param 0.8 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 5 --lambda_param 0.9 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 7 --lambda_param 0.9 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-    run_with_retry "python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon 7 --lambda_param 1 --seed $seed_val --lr 0.001 --weight_decay 0.003"
-
+    
+    for epsilon in "${epsilons[@]}"; do
+        for lambda in "${lambda_params[@]}"; do
+            cmd="python main.py --dataset CIFAR10 --iid --method LaplaceLDP --device GPU --num_clients 50 --num_rounds 100 --epsilon $epsilon --lambda_param $lambda --seed $seed_val --lr 0.001 --weight_decay 0.003"
+            run_with_retry "$cmd"
+        done
+    done
 done

@@ -25,6 +25,8 @@ from methods.ldp_fl import LDPFL
 from methods.Gaussian_LDP import GaussianLDP
 from methods.Gaussian_CDP import GaussianCDP
 from methods.Laplace_LDP import LaplaceLDP
+from methods.CorQuant import CorQuant
+from methods.AugCorbinFL import AugCorBinFL
 from federated_trainer import FederatedTrainer
 from dataloaders.reddit import RedditDataLoader
 from dataloaders.femnist import FEMNISTDataLoader
@@ -50,7 +52,7 @@ def parse_arguments():
                         choices=['MNIST', 'CIFAR10', 'Shakespeare', 'Sent140', 'Reddit', 'FEMNIST'],
                         help='Dataset to use')
     parser.add_argument('--method', type=str, required=False, 
-                        choices=['FedAvg', 'CorbinFL', 'SignSGD', 'LDPFL', 'GaussianLDP', 'LaplaceLDP', 'GaussianCDP'],
+                        choices=['FedAvg', 'CorbinFL', 'AugCorbinFL', 'SignSGD', 'LDPFL', 'GaussianLDP', 'LaplaceLDP', 'GaussianCDP', 'CorQuant'],
                         help='Federated learning method')
     parser.add_argument('--iid', action='store_true',
                         help='Whether to use IID data splitting (for Shakespeare)')
@@ -73,6 +75,8 @@ def parse_arguments():
                        help='Client dropout probability')
     parser.add_argument('--batch_size', type=int, default=64,
                        help='Batch size for training')
+    parser.add_argument('--Gamma', type=float, default=0.5,
+                        help='Fraction of clients using independent quantization')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed')
     parser.add_argument('--eval_every', type=int, default=1,
@@ -373,12 +377,39 @@ def main():
             eps=args.adam_eps if args.use_adam else None,
             device=device
         )
+    elif args.method == "AugCorbinFL":
+        method = AugCorBinFL(
+            epsilon=args.epsilon,
+            num_rand=args.num_rand,
+            gamma=args.Gamma,
+            lambda_param=args.lambda_param,
+            dropout=args.dropout,
+            use_adam=args.use_adam,
+            beta1=args.beta1 if args.use_adam else None,
+            beta2=args.beta2 if args.use_adam else None,
+            lr=args.lr if args.use_adam else None,
+            eps=args.adam_eps if args.use_adam else None,
+            device=device
+        )
     elif args.method == "SignSGD":
         method = SignSGD(
             lr=0.0003,  # 0.0001 from paper's recommended default
             beta=0.9,   # β=0.9 from paper's recommended default
             weight_decay=0,  # λ from algorithm
             dropout=args.dropout,
+            device=device
+        )
+    elif args.method == "CorQuant":
+        method = CorQuant(
+            epsilon=args.epsilon,
+            num_rand=args.num_rand,
+            lambda_param=args.lambda_param,
+            dropout=args.dropout,
+            use_adam=args.use_adam,
+            beta1=args.beta1 if args.use_adam else None,
+            beta2=args.beta2 if args.use_adam else None,
+            lr=args.lr if args.use_adam else None,
+            eps=args.adam_eps if args.use_adam else None,
             device=device
         )
     elif args.method == "LDPFL":
