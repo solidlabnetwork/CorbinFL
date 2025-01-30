@@ -4,15 +4,28 @@ This document outlines the structure and format of the FEMNIST dataset as proces
 
 ---
 
+## Quick Start
+
+```bash
+# Run with default settings (uses current directory)
+python femnist_preprocessor.py
+
+# Or specify custom directory
+python femnist_preprocessor.py --data_dir /path/to/your/directory
+```
+
 ## Directory Structure
 
-The dataset is stored in the following directories during and after preprocessing:
+```
+data_dir/
+├── raw_data/          # Raw datasets
+│   ├── by_class/      # Class-organized images
+│   └── by_write/      # Writer-organized images
+├── intermediate/      # Processing checkpoints
+└── all_data/         # Processed JSONs
+```
 
-### 1. **`raw_data/`**
-- Contains the original dataset extracted from the downloaded archives.
-- Organized into two subdirectories:
-  - **`by_class/`**: Images grouped by class (e.g., digits, uppercase letters, lowercase letters).
-  - **`by_write/`**: Images grouped by writer.
+
 
 ### 2. **`intermediate/`**
 - Stores intermediate processing results in serialized Python objects using `pickle`. These include:

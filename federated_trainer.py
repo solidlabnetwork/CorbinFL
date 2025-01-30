@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from typing import List, Optional, Tuple
 import time
 from methods.signsgd import SignSGD
+import os
 
 from main_dp_func import (
     compute_center_and_range,
@@ -29,6 +30,7 @@ class FederatedTrainer:
         lr: float = 0.001,
         weight_decay: float = 0.0,
         data_loader: object = None,
+        is_save: bool = False,
     ):
         self.method = method
         self.model = model
@@ -40,11 +42,13 @@ class FederatedTrainer:
         self.device = device
         self.num_rounds = num_rounds
         self.checkpoint_path = checkpoint_path
+        self.checkpoint_dir = os.path.dirname(self.checkpoint_path)
         self.eval_every = eval_every
         self.lr = lr
         self.weight_decay = weight_decay
         self.data_loader = data_loader
         self.client_momentums = {} # Store client momentum states
+        self.is_save = is_save # Save C and R , and weightsif True
         
         if self.dataset_name == 'reddit':
             self.criteria = nn.CrossEntropyLoss(ignore_index=val_loader.dataset.pad_idx)
@@ -60,6 +64,10 @@ class FederatedTrainer:
         # Compute center and range for each layer
         C, R = compute_center_and_range(self.model, self.device)
 
+        # Save C and R if is_save is True
+        if self.is_save:
+            # os.makedirs(self.checkpoint_path, exist_ok=True)
+            torch.save((C, R), os.path.join(self.checkpoint_dir, f'round_{round_num}_CR.pt'))
 
         global_state_dict = self.model.state_dict()
         
@@ -89,6 +97,12 @@ class FederatedTrainer:
             if 'weight' in name or 'bias' in name:
                 param_to_key[idx] = name
                 idx += 1
+        
+        # Initialize lists to store updates if saving is enabled
+        if self.is_save:
+            updates_before = []
+            updates_after = []
+        
         
         # Local training - process clients in batches
         client_batch_size = 50
@@ -127,6 +141,11 @@ class FederatedTrainer:
                 if is_gradient_based:
                     self.client_momentums[actual_client_idx] = new_momentum
                 
+                # Store update before processing
+                if self.is_save:
+                    update_before = client_update if is_gradient_based else client_model.state_dict()
+                    updates_before.append(update_before)
+
                 # Process client update
                 processed_state_dict = self.method.process_client_update(
                     client_update if is_gradient_based else client_model.state_dict(),
@@ -136,6 +155,10 @@ class FederatedTrainer:
                     round_data
                 )
                 
+                # Store update after processing
+                if self.is_save and processed_state_dict is not None:
+                    updates_after.append(processed_state_dict)
+
                 if processed_state_dict is not None:
                     # Get client weight
                     if hasattr(self, 'client_weights') and is_gradient_based==False:
@@ -155,6 +178,11 @@ class FederatedTrainer:
                 # torch.cuda.empty_cache()
             
             torch.cuda.empty_cache()
+        
+        # Save all updates at once if is_save is True
+        if self.is_save:
+            torch.save(updates_before, os.path.join(self.checkpoint_dir, f'round_{round_num}_updates_before.pt'))
+            torch.save(updates_after, os.path.join(self.checkpoint_dir, f'round_{round_num}_updates_after.pt'))
         
         # Use method's aggregation logic for final update
         dummy_local_models = [weighted_sum]

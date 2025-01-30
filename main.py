@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Tuple
 import json
 import pickle
+import argparse
 
 from main_dp_func import (
     load_data,
@@ -22,6 +23,7 @@ from methods.FedAvg import FedAvg
 from methods.signsgd import SignSGD
 from methods.ldp_fl import LDPFL
 from methods.Gaussian_LDP import GaussianLDP
+from methods.Gaussian_CDP import GaussianCDP
 from methods.Laplace_LDP import LaplaceLDP
 from federated_trainer import FederatedTrainer
 from dataloaders.reddit import RedditDataLoader
@@ -34,13 +36,21 @@ from dataloaders.shakespeare import ShakespeareNonIIDDataLoader
 def parse_arguments():
     import argparse
     parser = argparse.ArgumentParser(description="Federated Learning with CorbinFL")
+
+    # Add resume-related arguments
+    parser.add_argument('--resume', action='store_true',
+                       help='Resume training from checkpoint')
+    parser.add_argument('--checkpoint_path', type=str,
+                       help='Path to model checkpoint file (.pth)')
+    parser.add_argument('--results_path', type=str,
+                       help='Path to results directory containing config.txt and CSV')
     
     # Required arguments
-    parser.add_argument('--dataset', type=str, required=True,
+    parser.add_argument('--dataset', type=str, required=False,
                         choices=['MNIST', 'CIFAR10', 'Shakespeare', 'Sent140', 'Reddit', 'FEMNIST'],
                         help='Dataset to use')
-    parser.add_argument('--method', type=str, required=True, 
-                        choices=['FedAvg', 'CorbinFL', 'SignSGD', 'LDPFL', 'GaussianLDP', 'LaplaceLDP'],
+    parser.add_argument('--method', type=str, required=False, 
+                        choices=['FedAvg', 'CorbinFL', 'SignSGD', 'LDPFL', 'GaussianLDP', 'LaplaceLDP', 'GaussianCDP'],
                         help='Federated learning method')
     parser.add_argument('--iid', action='store_true',
                         help='Whether to use IID data splitting (for Shakespeare)')
@@ -67,6 +77,8 @@ def parse_arguments():
                        help='Random seed')
     parser.add_argument('--eval_every', type=int, default=1,
                        help='Evaluate every N rounds')
+    parser.add_argument('--save_weights', action='store_true',
+                       help='Save client weights to disk')
     # Add Adam-related arguments
     parser.add_argument('--use_adam', action='store_true',
                        help='Use Adam-style updates instead of lambda-based updates')
@@ -81,7 +93,15 @@ def parse_arguments():
     parser.add_argument('--adam_eps', type=float, default=1e-8,
                        help='Adam epsilon parameter (default: 1e-8)')
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    # Validate arguments
+    if args.resume:
+        if not args.checkpoint_path or not args.results_path:
+            parser.error("Both --checkpoint_path and --results_path are required when --resume is set")
+    elif not args.dataset or not args.method:
+        parser.error("--dataset and --method are required when not resuming")
+    
+    return args
 
 def setup_experiment_tracking(args) -> Tuple[str, str]:
     """Setup directories and files for experiment tracking"""
@@ -120,6 +140,50 @@ def save_results(results: List[List[float]], results_path: str):
     ]
     df = pd.DataFrame(results, columns=columns)
     df.to_csv(results_path, index=False)
+
+def load_previous_config(results_path: str) -> argparse.Namespace:
+    """Load configuration from a previous run"""
+    config_path = os.path.join(results_path, 'config.txt')
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found at {config_path}")
+    
+    args = argparse.Namespace()
+    with open(config_path, 'r') as f:
+        for line in f:
+            key, value = line.strip().split(': ')
+            # Convert string values to appropriate types
+            if value.lower() == 'true':
+                value = True
+            elif value.lower() == 'false':
+                value = False
+            elif value.lower() == 'none':
+                value = None
+            else:
+                try:
+                    value = float(value)
+                    if value.is_integer():
+                        value = int(value)
+                except ValueError:
+                    pass
+            setattr(args, key, value)
+    return args
+
+def load_previous_results(results_path: str) -> Tuple[List[List[float]], int]:
+    """Load previous results and get last completed round"""
+    results_file = None
+    # Try to find the CSV file in the results directory
+    for file in os.listdir(results_path):
+        if file.endswith('.csv'):
+            results_file = os.path.join(results_path, file)
+            break
+    
+    if not results_file:
+        return [], 0
+    
+    df = pd.read_csv(results_file)
+    last_round = int(df['Round'].max())
+    results = df.values.tolist()
+    return results, last_round, results_file
 
 def get_model_creator(dataset_name: str):
 
@@ -171,23 +235,66 @@ def get_model_creator(dataset_name: str):
     return create_model, lr, weight_decay
 
 def main():
-    # Parse arguments and setup
     args = parse_arguments()
+    curr_args = args
+    # Handle resuming from checkpoint
+    if args.resume:
+        print("\n=== Resuming Previous Experiment ===")
+        print(f"Loading checkpoint from: {args.checkpoint_path}")
+        print(f"Loading results from: {args.results_path}")
+        
+        # Load previous configuration
+        prev_args = load_previous_config(args.results_path)
+        # Update with any new command line arguments
+        for key, value in vars(args).items():
+            if value is not None and key not in ['resume', 'checkpoint_path', 'results_path']:
+                setattr(prev_args, key, value)
+        
+        
+        # Load previous results
+        results, last_round, results_file = load_previous_results(args.results_path)
+        checkpoint_path = args.checkpoint_path
+        results_path = results_file
+        args = prev_args
+        
+        print(f"Resuming from round {last_round + 1}")
+    else:
+        # Original setup for new run
+        checkpoint_path, results_path = setup_experiment_tracking(args)
+        results = []
+        last_round = 0
+    
     device = setup_device(args.device)
     set_seed(args.seed)
     
-    # Setup experiment tracking
-    checkpoint_path, results_path = setup_experiment_tracking(args)
-    
-    print("=== Experiment Configuration ===")
+    print("\n=== Experiment Configuration ===")
     print(f"Dataset: {args.dataset}")
     print(f"Number of clients: {args.num_clients}")
     print(f"Number of rounds: {args.num_rounds}")
     print(f"Privacy budget (ε): {args.epsilon}")
     print(f"Device: {args.device}")
     print(f"Checkpoint path: {checkpoint_path}")
+    print(f"Results path: {results_path}")
     print("==============================\n")
     
+    # Initialize model
+    print("Initializing model...")
+    model_creator, lr, weight_decay = get_model_creator(args.dataset)
+    model = model_creator(device)
+    
+    if curr_args.resume:
+        start_round, accuracy_list, train_accuracy_list, results, counter, best_accuracy = load_checkpoint(
+            checkpoint_path, model
+        )
+        print(f"Loaded checkpoint from round {start_round} (Val Acc: {best_accuracy:.2f}%)")
+        last_round = start_round  # Use start_round for the training loop
+        best_val_acc = best_accuracy  # Use best_accuracy for checkpoint saving
+    else:
+        best_val_acc = 0
+        counter = 0
+        start_round = 0
+
+
     # data loading
     # For Reddit dataset
     if args.dataset.lower() == 'reddit':
@@ -236,11 +343,11 @@ def main():
         )
         data_loader = None  # Not needed for other datasets
     
-    # Initialize model
-    print("Initializing model...")
-    # model = ResNet18().to(device) if args.dataset == "CIFAR10" else CNNMNIST().to(device)
-    model_creator, lr, weight_decay = get_model_creator(args.dataset)
-    # print(f"GPU memory after model init: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+    # # Initialize model
+    # print("Initializing model...")
+    # # model = ResNet18().to(device) if args.dataset == "CIFAR10" else CNNMNIST().to(device)
+    # model_creator, lr, weight_decay = get_model_creator(args.dataset)
+    # # print(f"GPU memory after model init: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
     
     # Initialize method
     if args.method == "FedAvg":
@@ -248,9 +355,11 @@ def main():
             device=device
         )
     elif args.method == "GaussianLDP":
-        method = GaussianLDP(epsilon=args.epsilon, device=device)
+        method = GaussianLDP(epsilon=args.epsilon, device=device, lambda_param=args.lambda_param)
+    elif args.method == "GaussianCDP":
+        method = GaussianCDP(epsilon=args.epsilon, device=device, lambda_param=args.lambda_param)   
     elif args.method == "LaplaceLDP":
-        method = LaplaceLDP(epsilon=args.epsilon, device=device)
+        method = LaplaceLDP(epsilon=args.epsilon, device=device, lambda_param=args.lambda_param)
     elif args.method == "CorbinFL":
         method = CorBinFL(
             epsilon=args.epsilon,
@@ -301,7 +410,8 @@ def main():
         eval_every=args.eval_every,
         lr=args.lr,
         weight_decay=args.weight_decay,
-        data_loader=data_loader  # Will be None for non-Reddit datasets
+        data_loader=data_loader,  # Will be None for non-Reddit datasets
+        is_save=args.save_weights   
     )
     
     # Training loop
@@ -310,7 +420,7 @@ def main():
     counter = 0
     results = []
     
-    for round in range(args.num_rounds):
+    for round in range(start_round, args.num_rounds):
         # Train round and get accuracies
         accuracies = trainer.train_round(round)
         

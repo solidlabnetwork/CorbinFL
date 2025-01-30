@@ -59,9 +59,13 @@ class LaplaceLDP(FederatedMethod):
         # Compute Laplace scale parameter (b = sensitivity/epsilon)
         sensitivity = 2 * r
         scale = sensitivity / self.epsilon
+        # print('scale:', scale)
         
         # Add Laplace noise to clipped weights
-        noise = torch.distributions.Laplace(0, scale).sample(W.shape).to(self.device)
+        if scale>0:
+            noise = torch.distributions.Laplace(0, scale).sample(W.shape).to(self.device)
+        else:
+            noise = torch.zeros(W.shape).to(self.device)
         W = W + noise
         
         return W.view(shape)

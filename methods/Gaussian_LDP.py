@@ -1,6 +1,8 @@
 import torch
 from .base import FederatedMethod
 from main_dp_func import federated_learning_pairing
+import math
+from scipy import optimize
 
 
 class GaussianLDP(FederatedMethod):
@@ -47,6 +49,45 @@ class GaussianLDP(FederatedMethod):
         
         return round_data
 
+    def compute_sigma_agm(self,epsilon, delta, sensitivity):
+        """
+        Compute the optimal sigma for the Gaussian mechanism using the Analytical Gaussian Mechanism (AGM).
+
+        Balle B, Wang YX. 
+        Improving the gaussian mechanism for differential privacy: Analytical calibration and optimal denoising. 
+        In International Conference on Machine Learning 2018 Jul 3 (pp. 394-403). PMLR.
+
+        Inputs:
+        - epsilon (float): The epsilon parameter for differential privacy.
+        - delta (float): The delta parameter for differential privacy.
+        - sensitivity (float): The sensitivity of the query.
+
+        Output:
+        - sigma (float): The optimal standard deviation for the Gaussian mechanism.
+
+        The function computes the tightest possible sigma for the Gaussian mechanism
+        that satisfies (epsilon, delta)-differential privacy for a given query sensitivity.
+        """
+        def phi(t):
+            return 0.5 * (1.0 + math.erf(t / math.sqrt(2.0)))
+
+        def B_plus(v):
+            return phi(math.sqrt(epsilon * v)) - math.exp(epsilon) * phi(-math.sqrt(epsilon * (v + 2)))
+
+        def B_minus(u):
+            return phi(-math.sqrt(epsilon * u)) - math.exp(epsilon) * phi(-math.sqrt(epsilon * (u + 2)))
+
+        delta_0 = phi(0) - math.exp(epsilon) * phi(-math.sqrt(2 * epsilon))
+
+        if delta >= delta_0:
+            v_star = optimize.brentq(lambda v: B_plus(v) - delta, 0, 100)
+            alpha = math.sqrt(1 + v_star / 2) - math.sqrt(v_star / 2)
+        else:
+            u_star = optimize.brentq(lambda u: B_minus(u) - delta, 0, 100)
+            alpha = math.sqrt(1 + u_star / 2) + math.sqrt(u_star / 2)
+
+        return alpha * sensitivity / math.sqrt(2 * epsilon)
+    
     def _perturb_weight(self, W, c, r):
         """
         Gaussian mechanism weight perturbation with proper clipping.
@@ -61,8 +102,12 @@ class GaussianLDP(FederatedMethod):
         delta = 1e-5
         sensitivity = 2 * r
         # sigma = sensitivity * torch.sqrt(torch.tensor(2 * torch.log(torch.tensor(1.25/delta, device=self.device)), device=self.device)) / self.epsilon
-        sigma = sensitivity * torch.sqrt(2 * torch.log(torch.tensor(1.25/delta, device=self.device))) / self.epsilon
-        
+        # sigma = sensitivity * torch.sqrt(2 * torch.log(torch.tensor(1.25/delta, device=self.device))) / self.epsilon
+        sigma = self.compute_sigma_agm(self.epsilon, delta, sensitivity)
+        # print('sigma:', sigma)
+        # print('sensitivity:', sensitivity)
+        # print('epsilon:', self.epsilon)
+        # print('delta:', delta)
         # Add Gaussian noise to clipped weights
         noise = torch.normal(0, sigma, size=W.shape, device=self.device)
         W = W + noise
