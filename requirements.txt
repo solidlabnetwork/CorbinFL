@@ -3,5 +3,6 @@ torchvision==0.21.0
 pandas==2.2.3
 pillow==11.1.0
 requests==2.32.3
-GPUtil==1.4.0  # If you're using GPU monitoring
-ijson==3.3.0   # If you're using JSON processing
+scipy==1.15.1
+GPUtil==1.4.0
+ijson==3.3.0
