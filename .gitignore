@@ -4,9 +4,7 @@ data/CIFAR10/cifar-10-batches-py/
 data/CIFAR10/cifar-10-python.tar.gz
 data/MNIST/MNIST/
 data/MNIST/raw/
-data/Reddit/reddit_leaf/
-data/Reddit/reddit_vocab.pck
-data/Reddit/client_data/
+data/Reddit/
 data/Sent140/glove/
 data/Sent140/sentiment140/
 data/Sent140/embs.json

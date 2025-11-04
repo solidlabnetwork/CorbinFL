@@ -99,3 +99,15 @@ To run comprehensive experiments with different epsilon and lambda parameters:
 cd Experiments
 bash epsilon_lambda_experiment.sh
 ```
+
+## Citation
+
+If you use this work, please cite the following paper:
+
+```bibtex
+@article{salehi2024corbinfl,
+  title   = {CorBin-FL: A Differentially Private Federated Learning Mechanism Using Common Randomness},
+  author  = {Salehi, Hojat Allah and Mia, Md Jueal and Pradhan, S Sandeep and Amini, M Hadi and Shirani, Farhad},
+  journal = {arXiv preprint arXiv:2409.13133},
+  year    = {2024}
+}
