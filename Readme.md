@@ -8,8 +8,8 @@ This project implements **CorBin-FL** and **Augmented CorBin-FL** — differenti
 
 | Method | Key | Privacy | Bits/coord | Reference |
 |--------|-----|---------|------------|-----------|
-| CorBin-FL | `CorbinFL` | ε-LDP | 1 | Salehi et al. 2024 (Ours) |
-| Augmented CorBin-FL | `AugCorbinFL` | ε-LDP | 1 | Salehi et al. 2024 (Ours) |
+| CorBin-FL | `CorbinFL` | ε-LDP | 1 | Salehi et al. 2026 (Ours) |
+| Augmented CorBin-FL | `AugCorbinFL` | ε-LDP | 1 | Salehi et al. 2026 (Ours) |
 | LDP-FL | `LDPFL` | ε-LDP | 1 | Sun et al. 2020 |
 | I-MVU | `IMVU` | ε-LDP | 1 / 2 / 4 | Guo et al., ICML 2023 |
 | PBM-PLDP | `PBM_PLDP` | ε-PLDP | 1 / 2 | Privatized Binomial Mechanism |
