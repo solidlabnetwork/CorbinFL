@@ -4,7 +4,7 @@ cd ..
 
 # Define parameters
 seeds=(0 42 100 1234 5678)
-epsilons=(0.1 0.5 1 3)
+epsilons=(0.1 0.3 1 3)
 # Generate lambda parameters from 0.1 to 1.0 with step 0.1
 lambda_params=($(seq 0.1 0.1 1.0))
 

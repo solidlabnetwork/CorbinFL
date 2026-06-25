@@ -417,7 +417,7 @@ def load_data(dataset_name: str, data_dir: str, n_clients: int, batch_size=64, i
 def load_checkpoint(checkpoint_path: str, global_model: nn.Module):
     if os.path.exists(checkpoint_path):
         print("Loading the checkpoint from", checkpoint_path)
-        checkpoint = torch.load(checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
         global_model.load_state_dict(checkpoint['model_state_dict'])
         start_round = checkpoint['round']
         accuracy_list = checkpoint['accuracy_list']

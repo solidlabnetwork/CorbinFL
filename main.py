@@ -27,6 +27,9 @@ from methods.Gaussian_CDP import GaussianCDP
 from methods.Laplace_LDP import LaplaceLDP
 from methods.CorQuant import CorQuant
 from methods.AugCorbinFL import AugCorBinFL
+from methods.IMVU import IMVU
+from methods.PBM_PLDP import PBM_PLDP
+from methods.RQM_FL import RQM_FL
 from federated_trainer import FederatedTrainer
 from dataloaders.reddit import RedditDataLoader
 from dataloaders.femnist import FEMNISTDataLoader
@@ -51,8 +54,10 @@ def parse_arguments():
     parser.add_argument('--dataset', type=str, required=False,
                         choices=['MNIST', 'CIFAR10', 'Shakespeare', 'Sent140', 'Reddit', 'FEMNIST'],
                         help='Dataset to use')
-    parser.add_argument('--method', type=str, required=False, 
-                        choices=['FedAvg', 'CorbinFL', 'AugCorbinFL', 'SignSGD', 'LDPFL', 'GaussianLDP', 'LaplaceLDP', 'GaussianCDP', 'CorQuant'],
+    parser.add_argument('--method', type=str, required=False,
+                        choices=['FedAvg', 'CorbinFL', 'AugCorbinFL', 'SignSGD', 'LDPFL',
+                                 'GaussianLDP', 'LaplaceLDP', 'GaussianCDP', 'CorQuant', 'IMVU',
+                                 'PBM_PLDP', 'RQM'],
                         help='Federated learning method')
     parser.add_argument('--iid', action='store_true',
                         help='Whether to use IID data splitting (for Shakespeare)')
@@ -96,7 +101,29 @@ def parse_arguments():
                        help='weight decay (default: 0)')
     parser.add_argument('--adam_eps', type=float, default=1e-8,
                        help='Adam epsilon parameter (default: 1e-8)')
-    
+    # I-MVU specific arguments
+    parser.add_argument('--imvu_budget', type=int, default=1,
+                       help='I-MVU output bits per coordinate (1=1-bit, 2=2-bit, 4=4-bit)')
+    parser.add_argument('--imvu_params_dir', type=str, default='imvu_params',
+                       help='Directory with precomputed I-MVU parameters')
+    parser.add_argument('--imvu_beta', type=float, default=1.0,
+                       help='I-MVU beta scaling factor (>1 spreads concentrated inputs; '
+                            'paper uses beta=1 for MNIST/CIFAR10, beta=32-128 for FEMNIST)')
+    # PBM-PLDP specific arguments
+    parser.add_argument('--pbm_m', type=int, default=1, choices=[1, 2],
+                       help='PBM-PLDP number of Bernoulli trials per coordinate '
+                            '(1=1-bit output, 2=2-bit output)')
+    parser.add_argument('--pbm_r_max', type=float, default=None,
+                       help='PBM-PLDP max encoding range r; caps the r/theta amplification '
+                            'to prevent divergence at small epsilon (e.g. 1.0)')
+    # RQM specific arguments
+    parser.add_argument('--rqm_m', type=int, default=2, choices=[2, 3],
+                       help='RQM number of quantization levels (2=1-bit, 3=2-bits)')
+    parser.add_argument('--rqm_q', type=float, default=0.5,
+                       help='RQM interior level retention probability (unused when rqm_m=2)')
+    parser.add_argument('--rqm_r_max', type=float, default=None,
+                       help='RQM max encoding range r; caps Xmax to prevent divergence at small epsilon (e.g. 1.0)')
+
     args = parser.parse_args()
     # Validate arguments
     if args.resume:
@@ -124,7 +151,15 @@ def setup_experiment_tracking(args) -> Tuple[str, str]:
     iid_ind = 'IID' if args.iid else 'non-IID'
     epsil_ind = f'ep_{args.epsilon}_' if args.epsilon is not None else ''
     NR_ind = f'NR_{args.num_rand}_' if args.num_rand is not None else ''
-    results_path = os.path.join(results_dir, f'{args.method}_{args.dataset}_{iid_ind}_N_{args.num_clients}_T_{args.num_rounds}_{epsil_ind}{NR_ind}lmbda_{args.lambda_param}_seed_{args.seed}_lr_{args.lr}.csv')
+    if args.method == 'IMVU':
+        budget_ind = f'b{args.imvu_budget}_'
+    elif args.method == 'PBM_PLDP':
+        budget_ind = f'm{args.pbm_m}_'
+    elif args.method == 'RQM':
+        budget_ind = f'm{args.rqm_m}_q{args.rqm_q}_'
+    else:
+        budget_ind = ''
+    results_path = os.path.join(results_dir, f'{args.method}_{args.dataset}_{iid_ind}_N_{args.num_clients}_T_{args.num_rounds}_{epsil_ind}{budget_ind}{NR_ind}lmbda_{args.lambda_param}_seed_{args.seed}_lr_{args.lr}.csv')
     
     # Save experiment config
     config_path = os.path.join(results_dir, 'config.txt')
@@ -393,9 +428,9 @@ def main():
         )
     elif args.method == "SignSGD":
         method = SignSGD(
-            lr=0.0003,  # 0.0001 from paper's recommended default
-            beta=0.9,   # β=0.9 from paper's recommended default
-            weight_decay=0,  # λ from algorithm
+            lr=args.lr,
+            beta=0.9,
+            weight_decay=args.weight_decay,
             dropout=args.dropout,
             device=device
         )
@@ -425,7 +460,51 @@ def main():
             eps=args.adam_eps if args.use_adam else None,
             device=device
         )
-    
+    elif args.method == "IMVU":
+        method = IMVU(
+            epsilon=args.epsilon,
+            budget=args.imvu_budget,
+            beta=args.imvu_beta,
+            lambda_param=args.lambda_param,
+            dropout=args.dropout,
+            use_adam=args.use_adam,
+            beta1=args.beta1 if args.use_adam else None,
+            beta2=args.beta2 if args.use_adam else None,
+            lr=args.lr if args.use_adam else None,
+            eps_adam=args.adam_eps if args.use_adam else 1e-8,
+            imvu_params_dir=args.imvu_params_dir,
+            device=device
+        )
+    elif args.method == "PBM_PLDP":
+        method = PBM_PLDP(
+            epsilon=args.epsilon,
+            m=args.pbm_m,
+            lambda_param=args.lambda_param,
+            dropout=args.dropout,
+            use_adam=args.use_adam,
+            beta1=args.beta1 if args.use_adam else None,
+            beta2=args.beta2 if args.use_adam else None,
+            lr=args.lr if args.use_adam else None,
+            eps=args.adam_eps if args.use_adam else 1e-8,
+            device=device,
+            r_max=args.pbm_r_max,
+        )
+    elif args.method == "RQM":
+        method = RQM_FL(
+            epsilon=args.epsilon,
+            m=args.rqm_m,
+            q=args.rqm_q,
+            lambda_param=args.lambda_param,
+            dropout=args.dropout,
+            use_adam=args.use_adam,
+            beta1=args.beta1 if args.use_adam else None,
+            beta2=args.beta2 if args.use_adam else None,
+            lr=args.lr if args.use_adam else None,
+            eps=args.adam_eps if args.use_adam else 1e-8,
+            device=device,
+            r_max=args.rqm_r_max,
+        )
+
     # Initialize trainer
     trainer = FederatedTrainer(
         method=method,

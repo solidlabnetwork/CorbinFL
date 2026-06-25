@@ -43,12 +43,12 @@ class CorQuant(FederatedMethod):
         pi_dict = {}
         for name, param in global_model.named_parameters():
             if 'weight' in name or 'bias' in name:
-                shape = param.shape
-                # Create permutation tensor for each element in the parameter
-                pi_dict[name] = torch.stack([
-                    torch.randperm(n_clients, device=self.device) 
-                    for _ in range(torch.prod(torch.tensor(shape)))
-                ]).reshape(*shape, n_clients)
+                pi_dict[name] = (
+                    torch.rand(param.numel(), n_clients, device=self.device, dtype=torch.float64)
+                    .argsort(dim=1)
+                    .to(torch.uint8)
+                    .reshape(*param.shape, n_clients)
+                )
         
         round_data = {
             'client_roles': client_roles,

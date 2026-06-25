@@ -47,8 +47,15 @@ class FederatedTrainer:
         self.lr = lr
         self.weight_decay = weight_decay
         self.data_loader = data_loader
-        self.client_momentums = {} # Store client momentum states
         self.is_save = is_save # Save C and R , and weightsif True
+
+        # Load persisted momentum states if resuming a SignSGD run
+        momentum_path = os.path.join(self.checkpoint_dir, 'client_momentums.pt')
+        if os.path.exists(momentum_path):
+            self.client_momentums = torch.load(momentum_path, map_location=device, weights_only=False)
+            print(f"Loaded client momentum states from {momentum_path}")
+        else:
+            self.client_momentums = {}
         
         if self.dataset_name == 'reddit':
             self.criteria = nn.CrossEntropyLoss(ignore_index=val_loader.dataset.pad_idx)
@@ -169,7 +176,7 @@ class FederatedTrainer:
                         weight = 1.0 / n_clients
                     
                     # Add to weighted sum
-                    for key in weighted_sum:
+                    for key in processed_state_dict:
                         weighted_sum[key] += weight * processed_state_dict[key].float()
                 
                 del client_model
@@ -194,7 +201,12 @@ class FederatedTrainer:
         )
         
         self.model.load_state_dict(global_state_dict)
-        
+
+        # Persist SignSGD momentum states alongside the checkpoint directory
+        if is_gradient_based and self.client_momentums:
+            momentum_path = os.path.join(self.checkpoint_dir, 'client_momentums.pt')
+            torch.save(self.client_momentums, momentum_path)
+
         round_end_time = time.time()
         round_time = round_end_time - round_start_time
         print(f"Round {round_num + 1} completed in {round_time:.2f} seconds")
