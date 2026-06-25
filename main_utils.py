@@ -11,7 +11,7 @@ def setup_device(device_type: str):
             return select_free_gpu(max_memory_usage=0.5)
         except Exception as e:
             print(f"Error selecting GPU: {e}")
-            print("No free GPU available. Selecting CPU for processing.")
+            print("No free GPU available. Selecting CPU.")
             return torch.device("cpu")
     return torch.device("cpu")
 

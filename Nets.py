@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
-# Small2VGG Model for MNIST
+# Small2VGG Model 
 class CNNMNIST(nn.Module):
     def __init__(self):
         super(CNNMNIST, self).__init__()
